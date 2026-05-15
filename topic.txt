@@ -1,0 +1,7 @@
+Đề tài 2: Tìm hiểu và triển khai Database Security (Data Sunrise, DBHawk, ACRA) 
+
+Tìm hiểu những tính năng của Database Security: Active Monitor, DBF, Data Masking, Performance Monitoring, Sensitive Data Discovery. 
+
+Giả lập ngữ cảnh để kiểm tra những tính năng hoạt động như thế nào. 
+
+Advanced: Trên container và cloud 

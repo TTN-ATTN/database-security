@@ -1,0 +1,32 @@
+groups:
+  - name: phase1-baseline
+    rules:
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: warning
+          phase: phase1
+        annotations:
+          summary: "Prometheus target is down"
+          description: "{{ $labels.job }} target {{ $labels.instance }} has been down for more than 30 seconds."
+
+      - alert: MySQLExporterDown
+        expr: up{job="mysql"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          phase: phase1
+        annotations:
+          summary: "MySQL exporter is down"
+          description: "Prometheus cannot scrape mysqld_exporter at {{ $labels.instance }}."
+
+      - alert: MySQLHighConnections
+        expr: mysql_global_status_threads_connected > 150
+        for: 1m
+        labels:
+          severity: warning
+          phase: phase1
+        annotations:
+          summary: "MySQL connection count is high"
+          description: "MySQL has {{ $value }} active client connections."
