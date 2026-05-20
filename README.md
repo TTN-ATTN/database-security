@@ -2,7 +2,10 @@
 
 Đồ án môn học về Database Security, triển khai theo từng phase trong [proposal.md](proposal.md).
 
-Trạng thái hiện tại của source code: **hoàn thành Phase 1 - Môi Trường Nền**.
+Trạng thái hiện tại của source code:
+
+- **Phase 1 - Môi Trường Nền**: hoàn thành.
+- **Phase 2 - Database, Seed Data, RBAC/Masking**: đã có source SQL/script, có thể chạy sau khi Phase 1 lên ổn định.
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -14,7 +17,15 @@ Phase 1 cung cấp baseline chạy bằng Docker Compose:
 - Alert rules cơ bản cho trạng thái target và connection count.
 - Script kiểm tra endpoint sau khi khởi động stack.
 
-Các phần schema, seed data, RBAC, masking, Acra, HA database cluster và Kubernetes sẽ được triển khai ở các phase sau.
+Phase 2 hiện có:
+
+- Schema `users`, `orders`, `activity_logs`.
+- View `users_masked`.
+- RBAC để `appuser` đọc view masked, không đọc trực tiếp bảng `users`.
+- Script seed dữ liệu giả lập.
+- Script kiểm tra masking/RBAC.
+
+Các phần Active Monitor, Acra/DBF, performance load test, sensitive discovery, HA database cluster và Kubernetes sẽ được triển khai ở các phase sau.
 
 ## Môi Trường
 
@@ -67,6 +78,37 @@ Nếu mọi thứ ổn, script sẽ kiểm tra được:
 - Prometheus readiness và alert rules.
 - Alertmanager readiness.
 - Grafana health endpoint.
+
+## Chạy Phase 2
+
+Phase 2 cần Python dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Áp dụng schema, tạo masked view, cấu hình RBAC, seed dữ liệu và kiểm tra masking:
+
+```bash
+make phase2
+```
+
+Nếu chỉ muốn áp dụng lại SQL Phase 2 cho một database volume đã tồn tại:
+
+```bash
+make schema
+```
+
+Nếu muốn khởi tạo lại từ đầu bằng các file trong `docker-entrypoint-initdb.d`, chạy:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+Lệnh `down -v` sẽ xóa dữ liệu MySQL, Prometheus và Grafana đã lưu trong named volumes.
 
 ## Endpoint Local
 

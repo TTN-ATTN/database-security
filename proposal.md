@@ -238,7 +238,21 @@ Mục tiêu:
 - Cấp quyền để `appuser` chỉ đọc dữ liệu đã mask.
 - Chứng minh phân quyền bằng output query.
 
-### 6.3 Phase 3 - Security Gateway / Acra
+### 6.3 Phase 3 - Active Monitor
+
+```text
+MySQL Logs / Gateway Logs --> Evidence
+Test Queries              --> Audit Trail
+```
+
+Mục tiêu:
+
+- Bật nguồn log cần thiết ở MySQL và/hoặc gateway.
+- Tạo truy vấn bất thường để audit.
+- Ghi nhận user, thời điểm và nội dung query.
+- Thu thập log/screenshot làm bằng chứng Active Monitor.
+
+### 6.4 Phase 4 - Database Firewall / Acra
 
 ```text
 Client / App
@@ -257,21 +271,19 @@ Mục tiêu:
 - Áp dụng rule deny/allow đơn giản.
 - Demo query hợp lệ được allow và query nguy hiểm bị block.
 
-### 6.4 Phase 4 - Active Monitor và Performance Monitoring
+### 6.5 Phase 5 - Performance Monitoring
 
 ```text
-MySQL / Gateway Logs --> Evidence
-MySQL Metrics        --> Prometheus --> Grafana --> Alertmanager
+MySQL Metrics --> Prometheus --> Grafana --> Alertmanager
 ```
 
 Mục tiêu:
 
-- Bật nguồn log cần thiết.
-- Tạo truy vấn bất thường để audit.
 - Tạo load/slow query để quan sát metrics.
+- Theo dõi connection, throughput, slow query và target health.
 - Tạo alert cơ bản khi service down, connection tăng hoặc exporter mất scrape.
 
-### 6.5 Phase 5 - Sensitive Data Discovery
+### 6.6 Phase 6 - Sensitive Data Discovery
 
 ```text
 Python Scanner --> INFORMATION_SCHEMA
@@ -285,7 +297,7 @@ Mục tiêu:
 - Xuất kết quả JSON/CSV.
 - Đề xuất remediation: mask, remove, encrypt, restrict access.
 
-### 6.6 Phase 6 - High Availability Database Cluster
+### 6.7 Phase 7 - High Availability Database Cluster
 
 ```text
 Client / Security Gateway
@@ -309,7 +321,7 @@ Mục tiêu:
 - Demo failover bằng cách dừng primary node, xác nhận primary mới được bầu và client vẫn truy cập qua router.
 - Ghi lại giới hạn của đồ án: chưa triển khai multi-region DR, backup automation production-grade hoặc chaos testing nâng cao.
 
-### 6.7 Phase 7 - Advanced Kubernetes / Cloud Extension
+### 6.8 Phase 8 - Advanced Kubernetes / Cloud Extension
 
 ```text
 Local WSL2 / Ubuntu VM / DigitalOcean VPS

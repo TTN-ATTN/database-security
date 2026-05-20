@@ -1,7 +1,6 @@
 .PHONY: help env up down restart ps logs logs-mysql logs-prom logs-grafana \
-       mysql mysql-root mysql-app \
-       check-phase1 seed scan-schema scan-data test-masking test-sqli \
-       load stress-connections test-failover \
+       mysql-root mysql-app \
+       check-phase1 schema phase2 seed test-masking \
        clean clean-volumes \
        venv pip-install
 
@@ -11,7 +10,7 @@ COMPOSE := docker compose
 # ---------- help ----------
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
 # ---------- environment ----------
@@ -65,39 +64,20 @@ mysql-app: ## Open MySQL CLI as appuser
 check-phase1: ## Run Phase 1 baseline verification
 	bash scripts/check_phase1.sh
 
-# ---------- phase 2: seed & masking ----------
+# ---------- phase 2: schema, seed & masking ----------
+
+schema: ## Apply Phase 2 schema, masking view, and RBAC SQL
+	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/schema.sql
+	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/masking.sql
+	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/rbac.sql
+
+phase2: schema seed test-masking ## Run complete Phase 2 setup and verification
 
 seed: ## Seed database with sample data (scripts/seed_all.py)
 	python3 scripts/seed_all.py
 
 test-masking: ## Test data masking (scripts/test_masking.sh)
 	bash scripts/test_masking.sh
-
-# ---------- phase 3–4: active monitor & DBF ----------
-
-test-sqli: ## Run SQL injection test scenarios (scripts/test_sqli.py)
-	python3 scripts/test_sqli.py
-
-# ---------- phase 5: performance monitoring ----------
-
-load: ## Generate query load (scripts/generate_load.py)
-	python3 scripts/generate_load.py
-
-stress-connections: ## Stress-test connections (scripts/stress_connections.py)
-	python3 scripts/stress_connections.py
-
-# ---------- phase 6: sensitive data discovery ----------
-
-scan-schema: ## Scan schema for sensitive columns (scripts/scan_schema.py)
-	python3 scripts/scan_schema.py
-
-scan-data: ## Scan data for PII patterns (scripts/scan_data_patterns.py)
-	python3 scripts/scan_data_patterns.py
-
-# ---------- phase 7: HA cluster ----------
-
-test-failover: ## Test HA failover scenario (scripts/test_failover.py)
-	python3 scripts/test_failover.py
 
 # ---------- cleanup ----------
 
