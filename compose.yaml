@@ -23,17 +23,25 @@ services:
       - mysqld
       - --bind-address=0.0.0.0
       - --performance-schema=ON
-      - --slow_query_log=OFF
-      - --general_log=OFF
+      - --skip-name-resolve
+      - --local-infile=0
+      - --max-connections=200
+      # Phase 3 - Active Monitor
+      - --general-log=ON
+      - --general-log-file=/var/log/mysql/general.log
+      - --slow-query-log=ON
+      - --slow-query-log-file=/var/log/mysql/slow.log
+      - --long-query-time=0.5
+      - --log-output=FILE
     ports:
       - "127.0.0.1:${MYSQL_HOST_PORT:-3307}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./logs/mysql:/var/log/mysql
       - ./mysql/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
       - ./mysql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./mysql/masking.sql:/docker-entrypoint-initdb.d/02-masking.sql:ro
       - ./mysql/rbac.sql:/docker-entrypoint-initdb.d/03-rbac.sql:ro
-      - ./mysql/my.cnf:/etc/mysql/conf.d/z-custom.cnf:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
       interval: 10s

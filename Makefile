@@ -1,6 +1,7 @@
 .PHONY: help env up down restart ps logs logs-mysql logs-prom logs-grafana \
        mysql-root mysql-app \
        check-phase1 schema phase2 seed test-masking \
+       audit-traffic parse-audit check-phase3 phase3 tail-general tail-slow \
        clean clean-volumes \
        venv pip-install
 
@@ -78,6 +79,25 @@ seed: ## Seed database with sample data (scripts/seed_all.py)
 
 test-masking: ## Test data masking (scripts/test_masking.sh)
 	bash scripts/test_masking.sh
+
+# ---------- phase 3: active monitor ----------
+
+audit-traffic: ## Generate audit-worthy queries to populate MySQL logs
+	python3 scripts/generate_audit_queries.py
+
+parse-audit: ## Parse general.log + slow.log into JSON/CSV evidence
+	python3 scripts/parse_audit_log.py
+
+check-phase3: ## Run Phase 3 active-monitor verification end-to-end
+	bash scripts/check_phase3.sh
+
+phase3: check-phase3 ## Alias for check-phase3
+
+tail-general: ## Tail MySQL general log
+	tail -f logs/mysql/general.log
+
+tail-slow: ## Tail MySQL slow query log
+	tail -f logs/mysql/slow.log
 
 # ---------- cleanup ----------
 

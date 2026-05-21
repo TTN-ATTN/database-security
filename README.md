@@ -5,7 +5,8 @@
 Trạng thái hiện tại của source code:
 
 - **Phase 1 - Môi Trường Nền**: hoàn thành.
-- **Phase 2 - Database, Seed Data, RBAC/Masking**: đã có source SQL/script, có thể chạy sau khi Phase 1 lên ổn định.
+- **Phase 2 - Database, Seed Data, RBAC/Masking**: hoàn thành.
+- **Phase 3 - Active Monitor**: hoàn thành (MySQL general log + slow log, audit trail, evidence parser).
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -25,7 +26,14 @@ Phase 2 hiện có:
 - Script seed dữ liệu giả lập.
 - Script kiểm tra masking/RBAC.
 
-Các phần Active Monitor, Acra/DBF, performance load test, sensitive discovery, HA database cluster và Kubernetes sẽ được triển khai ở các phase sau.
+Phase 3 hiện có:
+
+- MySQL `general_log` và `slow_query_log` được bật qua [mysql/my.cnf](mysql/my.cnf), ghi file vào `/var/log/mysql` bên trong container, mount ra `logs/mysql/` trên host.
+- Script [scripts/generate_audit_queries.py](scripts/generate_audit_queries.py) sinh các query có chủ đích (normal app traffic, root đọc PII, appuser bị deny PII, abnormal `DELETE/TRUNCATE/DROP` trên bảng scratch, slow query) và gắn tag `/* phase3:<category> */` vào từng query để dễ truy lùng trong log.
+- Script [scripts/parse_audit_log.py](scripts/parse_audit_log.py) parse `general.log` + `slow.log` thành `audit_report.json` và `audit_summary.csv` làm bằng chứng audit (user, timestamp, command, query, query_time).
+- Script [scripts/check_phase3.sh](scripts/check_phase3.sh) xác nhận log đang ghi, chạy traffic generator, flush log, parse và in các dòng evidence quan trọng (denied PII access, abnormal operations).
+
+Các phần Acra/DBF, performance load test, sensitive discovery, HA database cluster và Kubernetes sẽ được triển khai ở các phase sau.
 
 ## Môi Trường
 
@@ -109,6 +117,55 @@ docker compose up -d
 ```
 
 Lệnh `down -v` sẽ xóa dữ liệu MySQL, Prometheus và Grafana đã lưu trong named volumes.
+
+## Chạy Phase 3 - Active Monitor
+
+Phase 3 dựa trên MySQL `general_log` và `slow_query_log` để xây dựng audit trail. Cấu hình logging được khai báo trong [mysql/my.cnf](mysql/my.cnf); file log được ghi ra `logs/mysql/` trên host (đã `.gitignore` log content nhưng giữ thư mục).
+
+Trước khi chạy lần đầu, đảm bảo thư mục log có quyền ghi cho container MySQL:
+
+```bash
+mkdir -p logs/mysql
+chmod 777 logs/mysql
+```
+
+Nếu Phase 1 đang chạy trước khi bật Phase 3, recreate MySQL để áp config mới:
+
+```bash
+docker compose up -d --force-recreate mysql
+```
+
+Chạy toàn bộ verification Phase 3:
+
+```bash
+make check-phase3
+```
+
+Script sẽ:
+
+1. Kiểm tra `general_log`, `slow_query_log`, `long_query_time`, `log_output` đang đúng giá trị.
+2. Liệt kê file log bên trong container.
+3. Chạy [scripts/generate_audit_queries.py](scripts/generate_audit_queries.py) để sinh traffic.
+4. `FLUSH LOGS` để file phản ánh buffer hiện tại.
+5. Xác nhận `logs/mysql/general.log` và `logs/mysql/slow.log` không rỗng.
+6. Parse log bằng [scripts/parse_audit_log.py](scripts/parse_audit_log.py) → `audit_report.json` + `audit_summary.csv`.
+7. In các dòng evidence quan trọng: appuser bị deny truy cập bảng `users` raw, root thực hiện `DELETE/TRUNCATE/DROP`.
+
+Các target Make rời:
+
+| Lệnh | Mô tả |
+|---|---|
+| `make audit-traffic` | Chỉ sinh traffic, không parse |
+| `make parse-audit` | Chỉ parse log đã có sẵn |
+| `make tail-general` | `tail -f` general log |
+| `make tail-slow` | `tail -f` slow log |
+
+Bằng chứng Phase 3 sau khi chạy:
+
+- `logs/mysql/general.log` - mọi query, kèm `user@host` và timestamp.
+- `logs/mysql/slow.log` - query vượt `long_query_time = 0.5s`.
+- `logs/mysql/audit_report.json` - structured per-event records.
+- `logs/mysql/audit_summary.csv` - đếm theo phase3 tag và theo command.
 
 ## Endpoint Local
 
