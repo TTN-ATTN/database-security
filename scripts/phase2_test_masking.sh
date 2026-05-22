@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 2: verify data masking and RBAC.
-# Run from the project root: bash scripts/test_masking.sh
+# Run from the project root: bash scripts/phase2_test_masking.sh
 
 set -euo pipefail
 

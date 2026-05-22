@@ -1,0 +1,15 @@
+# Phase 4 - Acra transparent encryption (evaluation path).
+# acra-server encrypts the listed columns on write and decrypts on read, so MySQL only
+# ever stores ciphertext. Demo target is a dedicated table (secure_cards) to avoid
+# touching the Phase 2 users table / masking views.
+schemas:
+  - table: secure_cards
+    columns:
+      - id
+      - holder
+      - card_number
+      - created_at
+    encrypted:
+      - column: card_number
+        data_type: str
+        client_id: dbsec_client

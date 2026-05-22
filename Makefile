@@ -1,7 +1,8 @@
 .PHONY: help env up down restart ps logs logs-mysql logs-prom logs-grafana \
        mysql-root mysql-app \
        check-phase1 schema phase2 seed test-masking \
-       audit-traffic parse-audit check-phase3 phase3 tail-general tail-slow \
+       audit-traffic parse-audit proxysql-audit check-phase3 phase3 tail-general tail-slow \
+       proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
        clean clean-volumes \
        venv pip-install
 
@@ -63,7 +64,7 @@ mysql-app: ## Open MySQL CLI as appuser
 # ---------- phase 1 ----------
 
 check-phase1: ## Run Phase 1 baseline verification
-	bash scripts/check_phase1.sh
+	bash scripts/phase1_check.sh
 
 # ---------- phase 2: schema, seed & masking ----------
 
@@ -74,22 +75,25 @@ schema: ## Apply Phase 2 schema, masking view, and RBAC SQL
 
 phase2: schema seed test-masking ## Run complete Phase 2 setup and verification
 
-seed: ## Seed database with sample data (scripts/seed_all.py)
-	python3 scripts/seed_all.py
+seed: ## Seed database with sample data (scripts/phase2_seed_all.py)
+	python3 scripts/phase2_seed_all.py
 
-test-masking: ## Test data masking (scripts/test_masking.sh)
-	bash scripts/test_masking.sh
+test-masking: ## Test data masking (scripts/phase2_test_masking.sh)
+	bash scripts/phase2_test_masking.sh
 
 # ---------- phase 3: active monitor ----------
 
 audit-traffic: ## Generate audit-worthy queries to populate MySQL logs
-	python3 scripts/generate_audit_queries.py
+	python3 scripts/phase3_generate_audit_queries.py
 
 parse-audit: ## Parse general.log + slow.log into JSON/CSV evidence
-	python3 scripts/parse_audit_log.py
+	python3 scripts/phase3_parse_audit_log.py
+
+proxysql-audit: ## (Phase 4 source) Collect ProxySQL query-digest + rule-hit audit
+	python3 scripts/phase3_collect_proxysql_audit.py
 
 check-phase3: ## Run Phase 3 active-monitor verification end-to-end
-	bash scripts/check_phase3.sh
+	bash scripts/phase3_check.sh
 
 phase3: check-phase3 ## Alias for check-phase3
 
@@ -98,6 +102,31 @@ tail-general: ## Tail MySQL general log
 
 tail-slow: ## Tail MySQL slow query log
 	tail -f logs/mysql/slow.log
+
+# ---------- phase 4: database firewall (ProxySQL) + Acra encryption ----------
+
+proxysql-setup: ## Load ProxySQL DBF deny rules into the running ProxySQL
+	bash scripts/phase4_proxysql_setup.sh
+
+dbf-test: ## Run the ProxySQL DBF allow/deny behavior test
+	python3 scripts/phase4_dbf_test.py
+
+acra-keys: ## Generate the Acra keystore (writes ACRA_MASTER_KEY to .env)
+	bash scripts/phase4_acra_keys.sh
+
+acra-up: ## Start the optional acra-server (transparent encryption eval path)
+	$(COMPOSE) --profile acra up -d acra-server
+
+acra-down: ## Stop the acra-server
+	$(COMPOSE) --profile acra stop acra-server
+
+enc-test: ## Run the Acra transparent encryption round-trip test
+	python3 scripts/phase4_encryption_test.py
+
+check-phase4: ## Run Phase 4 verification (DBF mandatory, Acra if running)
+	bash scripts/phase4_check.sh
+
+phase4: proxysql-setup check-phase4 ## Set up DBF rules and run Phase 4 verification
 
 # ---------- cleanup ----------
 

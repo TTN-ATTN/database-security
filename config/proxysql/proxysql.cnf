@@ -1,0 +1,54 @@
+#######################################################################################
+# Phase 4 - Database Firewall (DBF) main demo path: Client -> ProxySQL -> MySQL
+#
+# ProxySQL reads this file ONLY on first boot (empty datadir). The container runs with
+# an ephemeral datadir (no named volume), so this config re-applies on every recreate,
+# keeping the demo reproducible.
+#
+# Query rules (the actual deny rules) are NOT defined here. They are loaded via the
+# ProxySQL admin interface by scripts/phase4_proxysql_setup.sh, because regex patterns
+# in the libconfig .cnf format require fragile backslash escaping. Loading them through
+# admin SQL keeps the patterns readable and avoids parse errors.
+#######################################################################################
+
+datadir="/var/lib/proxysql"
+errorlog="/var/lib/proxysql/proxysql.log"
+
+admin_variables=
+{
+    # 'admin' is restricted to loopback by ProxySQL. 'radmin' is a second account that
+    # may connect remotely (from the dbsec-mysql container / host) to load rules.
+    admin_credentials="admin:admin;radmin:radmin"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=2
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    server_version="8.4.0"
+    monitor_username="monitor"
+    monitor_password="monitorpass"
+    monitor_connect_interval=60000
+    monitor_ping_interval=10000
+    monitor_read_only_interval=1500
+    connect_timeout_server=3000
+    commands_stats=true
+    sessions_sort=true
+}
+
+# Single backend MySQL in hostgroup 0. ProxySQL here is a policy-enforcement proxy
+# (DBF), not a load balancer, so one backend is intentional.
+mysql_servers=
+(
+    { address="dbsec-mysql", port=3306, hostgroup=0, max_connections=200 }
+)
+
+# Frontend user that flows through ProxySQL. ProxySQL uses the same credentials to
+# authenticate the client and to connect to the backend. dbfuser is created in MySQL
+# with mysql_native_password (see mysql/proxysql-users.sql).
+mysql_users=
+(
+    { username="dbfuser", password="dbfpass", default_hostgroup=0, active=1, transaction_persistent=1 }
+)
