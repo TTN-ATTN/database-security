@@ -4,6 +4,7 @@ keys/
 __pycache__/
 .env
 *.pyc
+.claude/
 
 # Phase 3: ignore generated log/evidence files but keep directory structure
 logs/**/*.log
