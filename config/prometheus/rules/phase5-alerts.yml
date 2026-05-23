@@ -1,0 +1,72 @@
+groups:
+  - name: phase5-performance
+    rules:
+      - alert: MySQLSlowQueryRateHigh
+        expr: rate(mysql_global_status_slow_queries[2m]) > 0.5
+        for: 1m
+        labels:
+          severity: warning
+          phase: phase5
+        annotations:
+          summary: "MySQL slow query rate is elevated"
+          description: "Slow queries are arriving at {{ $value | printf \"%.2f\" }}/s (threshold 0.5/s)."
+
+      - alert: MySQLThreadsRunningHigh
+        expr: mysql_global_status_threads_running > 20
+        for: 30s
+        labels:
+          severity: warning
+          phase: phase5
+        annotations:
+          summary: "MySQL active threads running is high"
+          description: "{{ $value }} threads are actively running queries (threshold 20)."
+
+      - alert: MySQLAbortedConnectionsSpike
+        expr: rate(mysql_global_status_aborted_connects[2m]) > 1
+        for: 1m
+        labels:
+          severity: warning
+          phase: phase5
+        annotations:
+          summary: "MySQL aborted connections are spiking"
+          description: "Aborted connections rate is {{ $value | printf \"%.2f\" }}/s (threshold 1/s)."
+
+      - alert: MySQLInnoDBRowLockWaitsHigh
+        expr: rate(mysql_global_status_innodb_row_lock_waits[2m]) > 1
+        for: 1m
+        labels:
+          severity: warning
+          phase: phase5
+        annotations:
+          summary: "InnoDB row lock waits are elevated"
+          description: "Row lock waits at {{ $value | printf \"%.2f\" }}/s indicate lock contention."
+
+      - alert: MySQLInnoDBBufferPoolHitRatioLow
+        expr: (1 - (mysql_global_status_innodb_buffer_pool_reads / mysql_global_status_innodb_buffer_pool_read_requests)) < 0.9
+        for: 2m
+        labels:
+          severity: warning
+          phase: phase5
+        annotations:
+          summary: "InnoDB buffer pool hit ratio is low"
+          description: "Buffer pool hit ratio is {{ $value | printf \"%.3f\" }} (threshold 0.9). Working set may exceed buffer pool size."
+
+      - alert: MySQLConnectionUsageHigh
+        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.7
+        for: 1m
+        labels:
+          severity: critical
+          phase: phase5
+        annotations:
+          summary: "MySQL connection usage exceeds 70% of max_connections"
+          description: "{{ $value | printf \"%.0f\" }}% of max_connections in use. Risk of connection exhaustion."
+
+      - alert: MySQLQPSDroppedToZero
+        expr: rate(mysql_global_status_questions[2m]) == 0
+        for: 2m
+        labels:
+          severity: critical
+          phase: phase5
+        annotations:
+          summary: "MySQL QPS has dropped to zero"
+          description: "No queries processed in the last 2 minutes. MySQL may be hung or unreachable."

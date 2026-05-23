@@ -3,6 +3,7 @@
        check-phase1 schema phase2 seed test-masking \
        audit-traffic parse-audit proxysql-audit check-phase3 phase3 tail-general tail-slow \
        proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
+       load-test stress-conn check-phase5 phase5 \
        clean clean-volumes \
        venv pip-install
 
@@ -127,6 +128,19 @@ check-phase4: ## Run Phase 4 verification (DBF mandatory, Acra if running)
 	bash scripts/phase4_check.sh
 
 phase4: proxysql-setup check-phase4 ## Set up DBF rules and run Phase 4 verification
+
+# ---------- phase 5: performance monitoring ----------
+
+load-test: ## Run sustained mixed query load (60s default)
+	python3 scripts/phase5_generate_load.py
+
+stress-conn: ## Run connection stress test (100 connections default)
+	python3 scripts/phase5_stress_connections.py
+
+check-phase5: ## Run Phase 5 performance monitoring verification end-to-end
+	bash scripts/phase5_check.sh
+
+phase5: check-phase5 ## Alias for check-phase5
 
 # ---------- cleanup ----------
 
