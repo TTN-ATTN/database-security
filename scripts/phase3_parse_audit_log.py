@@ -1,8 +1,8 @@
 """Phase 3: parse MySQL general.log and slow.log into structured audit evidence.
 
 Outputs:
-  - logs/mysql/audit_report.json  (per-event records)
-  - logs/mysql/audit_summary.csv  (per-category counts)
+  - logs/audit/audit_report.json  (per-event records)
+  - logs/audit/audit_summary.csv  (per-category counts)
   - stdout summary
 
 The general log format on MySQL 8.4:
@@ -29,8 +29,10 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs" / "mysql"
 GENERAL_LOG = LOG_DIR / "general.log"
 SLOW_LOG = LOG_DIR / "slow.log"
-REPORT_JSON = LOG_DIR / "audit_report.json"
-SUMMARY_CSV = LOG_DIR / "audit_summary.csv"
+OUTPUT_DIR = ROOT / "logs" / "audit"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_JSON = OUTPUT_DIR / "audit_report.json"
+SUMMARY_CSV = OUTPUT_DIR / "audit_summary.csv"
 
 PHASE3_TAG = re.compile(r"/\* phase3:([\w\-]+) \*/")
 GENERAL_LINE = re.compile(

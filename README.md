@@ -194,8 +194,8 @@ Bằng chứng Phase 3 sau khi chạy:
 
 - `logs/mysql/general.log` - mọi query, kèm `user@host` và timestamp.
 - `logs/mysql/slow.log` - query vượt `long_query_time = 0.5s`.
-- `logs/mysql/audit_report.json` - structured per-event records.
-- `logs/mysql/audit_summary.csv` - đếm theo phase3 tag và theo command.
+- `logs/audit/audit_report.json` - structured per-event records.
+- `logs/audit/audit_summary.csv` - đếm theo phase3 tag và theo command.
 - `logs/proxysql/proxysql_audit.json` + `.csv` - (Phase 4) attribution theo frontend user + deny hits ở tầng ProxySQL.
 - `logs/acra/acra_audit.log` - (Phase 4) audit trail integrity-chained của acra-server.
 

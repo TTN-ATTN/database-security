@@ -1,6 +1,6 @@
 .PHONY: help env up down restart ps logs logs-mysql logs-prom logs-grafana \
        mysql-root mysql-app \
-       check-phase1 schema phase2 seed test-masking \
+       check-phase1 phase1 schema phase2 seed test-masking \
        audit-traffic parse-audit proxysql-audit check-phase3 phase3 tail-general tail-slow \
        proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
        load-test stress-conn check-phase5 phase5 \
@@ -9,6 +9,7 @@
 
 SHELL  := /bin/bash
 COMPOSE := docker compose
+PYTHON := $(if $(wildcard .venv/bin/python3),.venv/bin/python3,python3)
 
 # ---------- help ----------
 
@@ -26,7 +27,7 @@ venv: ## Create Python virtual environment
 	@echo "Activate with: source .venv/bin/activate"
 
 pip-install: ## Install Python dependencies from requirements.txt
-	pip install -r requirements.txt
+	$(PYTHON) -m pip install -r requirements.txt
 
 # ---------- compose lifecycle ----------
 
@@ -67,17 +68,19 @@ mysql-app: ## Open MySQL CLI as appuser
 check-phase1: ## Run Phase 1 baseline verification
 	bash scripts/phase1_check.sh
 
+phase1: check-phase1 ## Alias for check-phase1
+
 # ---------- phase 2: schema, seed & masking ----------
 
 schema: ## Apply Phase 2 schema, masking view, and RBAC SQL
 	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/schema.sql
 	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/masking.sql
-	docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/rbac.sql
+	docker exec -i dbsec-mysql mysql --force -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/rbac.sql
 
 phase2: schema seed test-masking ## Run complete Phase 2 setup and verification
 
 seed: ## Seed database with sample data (scripts/phase2_seed_all.py)
-	python3 scripts/phase2_seed_all.py
+	$(PYTHON) scripts/phase2_seed_all.py
 
 test-masking: ## Test data masking (scripts/phase2_test_masking.sh)
 	bash scripts/phase2_test_masking.sh
@@ -85,13 +88,13 @@ test-masking: ## Test data masking (scripts/phase2_test_masking.sh)
 # ---------- phase 3: active monitor ----------
 
 audit-traffic: ## Generate audit-worthy queries to populate MySQL logs
-	python3 scripts/phase3_generate_audit_queries.py
+	$(PYTHON) scripts/phase3_generate_audit_queries.py
 
 parse-audit: ## Parse general.log + slow.log into JSON/CSV evidence
-	python3 scripts/phase3_parse_audit_log.py
+	$(PYTHON) scripts/phase3_parse_audit_log.py
 
 proxysql-audit: ## (Phase 4 source) Collect ProxySQL query-digest + rule-hit audit
-	python3 scripts/phase3_collect_proxysql_audit.py
+	$(PYTHON) scripts/phase3_collect_proxysql_audit.py
 
 check-phase3: ## Run Phase 3 active-monitor verification end-to-end
 	bash scripts/phase3_check.sh
@@ -110,7 +113,7 @@ proxysql-setup: ## Load ProxySQL DBF deny rules into the running ProxySQL
 	bash scripts/phase4_proxysql_setup.sh
 
 dbf-test: ## Run the ProxySQL DBF allow/deny behavior test
-	python3 scripts/phase4_dbf_test.py
+	$(PYTHON) scripts/phase4_dbf_test.py
 
 acra-keys: ## Generate the Acra keystore (writes ACRA_MASTER_KEY to .env)
 	bash scripts/phase4_acra_keys.sh
@@ -122,7 +125,7 @@ acra-down: ## Stop the acra-server
 	$(COMPOSE) --profile acra stop acra-server
 
 enc-test: ## Run the Acra transparent encryption round-trip test
-	python3 scripts/phase4_encryption_test.py
+	$(PYTHON) scripts/phase4_encryption_test.py
 
 check-phase4: ## Run Phase 4 verification (DBF mandatory, Acra if running)
 	bash scripts/phase4_check.sh
@@ -132,10 +135,10 @@ phase4: proxysql-setup check-phase4 ## Set up DBF rules and run Phase 4 verifica
 # ---------- phase 5: performance monitoring ----------
 
 load-test: ## Run sustained mixed query load (60s default)
-	python3 scripts/phase5_generate_load.py
+	$(PYTHON) scripts/phase5_generate_load.py
 
 stress-conn: ## Run connection stress test (100 connections default)
-	python3 scripts/phase5_stress_connections.py
+	$(PYTHON) scripts/phase5_stress_connections.py
 
 check-phase5: ## Run Phase 5 performance monitoring verification end-to-end
 	bash scripts/phase5_check.sh

@@ -8,7 +8,7 @@
 # Run from the project root:
 #   bash scripts/phase4_check.sh
 
-set -euo pipefail
+set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"

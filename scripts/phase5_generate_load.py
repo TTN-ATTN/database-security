@@ -30,6 +30,9 @@ stop_event = threading.Event()
 counters = {"select": 0, "insert": 0, "update": 0, "slow": 0, "error": 0}
 counter_lock = threading.Lock()
 
+valid_user_ids = []
+max_order_id = 0
+
 
 def inc(key):
     with counter_lock:
@@ -65,18 +68,20 @@ def worker_write():
         try:
             action = random.choice(["insert", "update"])
             if action == "insert":
+                uid = random.choice(valid_user_ids) if valid_user_ids else None
                 cur.execute(
                     "/* phase5:insert */ INSERT INTO activity_logs (user_id, action, notes, ip_address) "
                     "VALUES (%s, %s, %s, %s)",
-                    (random.randint(1, 500), "phase5_load", "load test entry", "10.0.0.1"),
+                    (uid, "phase5_load", "load test entry", "10.0.0.1"),
                 )
                 conn.commit()
                 inc("insert")
             else:
+                oid = random.randint(1, max_order_id) if max_order_id > 0 else 1
                 new_status = random.choice(["pending", "processing", "shipped", "delivered"])
                 cur.execute(
                     "/* phase5:update */ UPDATE orders SET status=%s WHERE id=%s",
-                    (new_status, random.randint(1, 2000)),
+                    (new_status, oid),
                 )
                 conn.commit()
                 inc("update")
@@ -117,6 +122,20 @@ def main():
 
     print(f"Phase 5 - load generator: {args.duration}s, "
           f"{args.select_workers} select + {args.write_workers} write + {args.slow_workers} slow workers")
+
+    global valid_user_ids, max_order_id
+    pre = mysql.connector.connect(**DB_CFG)
+    pc = pre.cursor()
+    pc.execute("SELECT id FROM users")
+    valid_user_ids = [r[0] for r in pc.fetchall()]
+    pc.execute("SELECT COALESCE(MAX(id), 0) FROM orders")
+    max_order_id = pc.fetchone()[0]
+    pc.close()
+    pre.close()
+    if not valid_user_ids:
+        print("  [WARN] users table is empty — inserts will use user_id=NULL")
+    if max_order_id == 0:
+        print("  [WARN] orders table is empty — updates will be no-ops")
 
     threads = []
     for _ in range(args.select_workers):

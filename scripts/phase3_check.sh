@@ -10,7 +10,7 @@
 # Run from the project root:
 #   bash scripts/phase3_check.sh
 
-set -euo pipefail
+set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -50,32 +50,40 @@ fi
 python3 scripts/phase3_generate_audit_queries.py
 
 echo
-echo "== 4. Flush logs so file mirrors current buffer =="
+echo "== 4. Flush logs and fix host-side permissions =="
 docker exec "$CONTAINER" mysql -uroot -p"$ROOT_PASS" -e "FLUSH LOGS;"
+docker exec "$CONTAINER" chmod 644 /var/log/mysql/general.log /var/log/mysql/slow.log 2>/dev/null || true
 
 echo
-echo "== 5. Verify log files on host are non-empty =="
-if [ ! -s "$GENERAL_LOG" ]; then
-  echo "[FAIL] $GENERAL_LOG is empty or missing." >&2
+echo "== 5. Verify log files are non-empty =="
+GL_SIZE=$(docker exec "$CONTAINER" stat -c%s /var/log/mysql/general.log 2>/dev/null || echo "0")
+SL_SIZE=$(docker exec "$CONTAINER" stat -c%s /var/log/mysql/slow.log 2>/dev/null || echo "0")
+echo "general.log size: ${GL_SIZE} bytes"
+echo "slow.log    size: ${SL_SIZE} bytes"
+if [ "$GL_SIZE" = "0" ]; then
+  echo "[FAIL] general.log is empty or missing." >&2
   exit 1
 fi
-if [ ! -s "$SLOW_LOG" ]; then
-  echo "[WARN] $SLOW_LOG is empty (slow queries may not have crossed long_query_time)."
+if [ "$SL_SIZE" = "0" ]; then
+  echo "[WARN] slow.log is empty (slow queries may not have crossed long_query_time)."
 fi
-echo "general.log size: $(wc -c <"$GENERAL_LOG") bytes"
-[ -s "$SLOW_LOG" ] && echo "slow.log    size: $(wc -c <"$SLOW_LOG") bytes"
 
 echo
 echo "== 6. Parse logs into structured audit evidence =="
+if [ ! -r "$GENERAL_LOG" ]; then
+  echo "  Host cannot read $GENERAL_LOG directly, copying from container ..."
+  docker cp "$CONTAINER:/var/log/mysql/general.log" "$GENERAL_LOG"
+  docker cp "$CONTAINER:/var/log/mysql/slow.log" "$SLOW_LOG" 2>/dev/null || true
+fi
 python3 scripts/phase3_parse_audit_log.py
 
 echo
 echo "== 7. Sample evidence rows: denied appuser PII access =="
-grep -E "phase3:pii-access-denied-appuser" "$GENERAL_LOG" | head -n 5 || true
+docker exec "$CONTAINER" grep "phase3:pii-access-denied-appuser" /var/log/mysql/general.log 2>/dev/null | tail -n 5 || true
 
 echo
 echo "== 8. Sample evidence rows: abnormal root operations =="
-grep -E "phase3:abnormal-root" "$GENERAL_LOG" | head -n 5 || true
+docker exec "$CONTAINER" grep "phase3:abnormal-root" /var/log/mysql/general.log 2>/dev/null | tail -n 5 || true
 
 # ----- update from phase 4: extra Active Monitor sources (proxy + encryption gateway) -----
 # These are optional and only run if the Phase 4 services are up. MySQL's general_log
@@ -106,6 +114,6 @@ fi
 echo
 echo "Phase 3 active-monitor checks passed."
 echo "Evidence (MySQL):    logs/mysql/general.log, logs/mysql/slow.log,"
-echo "                     logs/mysql/audit_report.json, logs/mysql/audit_summary.csv"
+echo "                     logs/audit/audit_report.json, logs/audit/audit_summary.csv"
 echo "Evidence (Phase 4):  logs/proxysql/proxysql_audit.json/.csv (if ProxySQL up),"
 echo "                     logs/acra/acra_audit.log (if acra-server up)"

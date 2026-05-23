@@ -23,8 +23,8 @@ set -a
 source .env
 set +a
 
-ADMIN_USER="${PROXYSQL_ADMIN_USER:-admin}"
-ADMIN_PASS="${PROXYSQL_ADMIN_PASSWORD:-admin}"
+ADMIN_USER="${PROXYSQL_ADMIN_USER:-radmin}"
+ADMIN_PASS="${PROXYSQL_ADMIN_PASSWORD:-radmin}"
 RULES_FILE="config/proxysql/query_rules.sql"
 
 echo "== Loading ProxySQL query rules from $RULES_FILE =="
