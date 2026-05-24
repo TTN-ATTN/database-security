@@ -9,6 +9,7 @@ Trạng thái hiện tại của source code:
 - **Phase 3 - Active Monitor**: hoàn thành (MySQL general log + slow log, audit trail, evidence parser).
 - **Phase 4 - Database Firewall + Acra Encryption**: hoàn thành (ProxySQL DBF làm enforcement chính; Acra transparent encryption ở evaluation path).
 - **Phase 5 - Performance Monitoring**: hoàn thành (Grafana dashboard nâng cao, alert rules, load test, connection stress test).
+- **Phase 6 - Sensitive Data Discovery**: hoàn thành (schema scan theo tên cột + data pattern scan email/phone/card/SSN, phát hiện PII rò rỉ trong free-text, xuất JSON/CSV kèm remediation).
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -59,6 +60,13 @@ Phase 5 hiện có:
 - **Load generator** ([scripts/phase5_generate_load.py](scripts/phase5_generate_load.py)): chạy multi-threaded SELECT/INSERT/UPDATE + slow query trong thời gian cấu hình được (mặc định 60s), tag `/* phase5:<type> */` vào mỗi query.
 - **Connection stress test** ([scripts/phase5_stress_connections.py](scripts/phase5_stress_connections.py)): mở nhiều connection đồng thời (mặc định 100) và giữ mở để tạo spike trên dashboard và trigger alert.
 - **Verification script** ([scripts/phase5_check.sh](scripts/phase5_check.sh)): kiểm tra alert rules loaded, chạy load test + stress test, verify metrics có dữ liệu, in trạng thái alert.
+
+Phase 6 hiện có:
+
+- **Schema scanner** ([scripts/phase6_scan_schema.py](scripts/phase6_scan_schema.py)): quét `INFORMATION_SCHEMA.COLUMNS` của `testdb`, flag các cột mà **tên** gợi ý PII/credential (email, phone, address, credit_card, ssn, password, token...). Mỗi finding kèm `pii_type`, `severity` và remediation cụ thể (mask/encrypt/restrict/hash). Đây là pass "PII có thể nằm ở đâu".
+- **Data pattern scanner** ([scripts/phase6_scan_data_patterns.py](scripts/phase6_scan_data_patterns.py)): sample dữ liệu thật từ mọi cột text và match regex email / phone / credit card (validate Luhn + IIN prefix + length) / SSN. Phát hiện giá trị nhạy cảm thật, kể cả PII rò rỉ trong cột free-text tên vô hại như `activity_logs.notes` — chỗ mà masking theo view/RBAC sẽ **bỏ sót**.
+- **Masking/RBAC sufficiency cross-check** (trong cùng data scanner): mỗi finding kèm `access_verdict`. Scanner đọc grants từ `INFORMATION_SCHEMA.{SCHEMA,TABLE}_PRIVILEGES`, kiểm tra account low-priv (`appuser`, đổi qua `--app-users`) có `SELECT` trực tiếp lên **base table** chứa PII không. Đọc qua view mask = an toàn; đọc thẳng base table = raw → `EXPOSED`. Kết quả thực tế: `users.*` = `PROTECTED` (appuser chỉ thấy qua `users_masked`), còn `activity_logs.notes` = `EXPOSED` (appuser có `SELECT activity_logs` mà bảng này không có view mask). Đây là điểm nối Phase 6 ↔ Phase 2: discovery không chỉ tìm PII mà còn chỉ ra masking/RBAC **chưa đủ** ở đâu. Với mỗi finding `EXPOSED`, scanner ghi luôn **giá trị PII thật** (`exposed_values`) làm bằng chứng.
+- **Verification script** ([scripts/phase6_check.sh](scripts/phase6_check.sh)): chạy cả 2 pass, xác nhận artifacts, và in các cột raw PII mà low-priv account đọc được (lộ gì / ở đâu / vì sao).
 
 ### Lưu ý kiến trúc Phase 4
 
@@ -281,6 +289,41 @@ Dashboard Phase 5 được provision sẵn trong Grafana với tên **Database S
 - Network traffic (bytes sent/received).
 
 Alert rules Phase 5 sẽ chuyển sang trạng thái `pending` rồi `firing` nếu ngưỡng bị vượt trong thời gian đủ lâu. Kiểm tra tại `http://127.0.0.1:9090/alerts`.
+
+## Chạy Phase 6 - Sensitive Data Discovery
+
+Phase 6 quét nơi dữ liệu nhạy cảm có thể nằm (theo tên cột) và nơi nó thực sự nằm (theo giá trị), không cần browser — toàn bộ là script + bằng chứng JSON/CSV. Cần MySQL đang chạy và đã seed dữ liệu Phase 2 (`make seed`).
+
+Chạy toàn bộ verification Phase 6:
+
+```bash
+make phase6
+```
+
+Script sẽ:
+
+1. Xác nhận `dbsec-mysql` đang chạy.
+2. Chạy [scripts/phase6_scan_schema.py](scripts/phase6_scan_schema.py): quét tên cột trong `INFORMATION_SCHEMA`, flag cột nghi PII kèm `object_type` (TABLE/VIEW), severity + remediation.
+3. Chạy [scripts/phase6_scan_data_patterns.py](scripts/phase6_scan_data_patterns.py): sample dữ liệu, match pattern email/phone/card/SSN, và đánh `access_verdict` cho từng finding.
+4. Xác nhận 4 file bằng chứng tồn tại.
+5. In các cột raw PII mà account low-priv (`appuser`) `SELECT` trực tiếp được — lộ gì / ở đâu / vì sao — kèm giá trị PII thật làm bằng chứng.
+
+Các target Make rời:
+
+| Lệnh | Mô tả |
+|---|---|
+| `make scan-schema` | Chỉ quét tên cột (schema scan) |
+| `make scan-data` | Chỉ quét giá trị + đánh giá access (data pattern scan), hỗ trợ `--limit`/`--examples`/`--app-users`/`--mask-all` |
+| `make check-phase6` | Chạy toàn bộ verification Phase 6 |
+
+Bằng chứng Phase 6 sau khi chạy (trong `logs/discovery/`):
+
+- `schema_findings.json` + `.csv` - cột bị flag theo tên, kèm `object_type`, `pii_type`, `severity`, `remediation`.
+- `data_findings.json` + `.csv` - mỗi finding gồm: `table`/`column` (lộ ở đâu), `pattern_type` (lộ cái gì), `severity`, `access_verdict` (`PROTECTED` vs `EXPOSED`), `exposed_to` (cho ai), `exposure_path` (vì sao — grant cụ thể, vd "appuser: table-level SELECT on activity_logs"), `assessment` (1 câu tóm tắt), `match_count`/`rows_affected`, `exposed_values` (giá trị PII **thật/unmasked**, chỉ cho finding `EXPOSED` làm bằng chứng), `remediation`.
+
+> ⚠️ Mặc định, finding `EXPOSED` ghi PII **thật** vào `exposed_values` làm bằng chứng tuyệt đối. Vì vậy `data_findings.json/.csv` đã được `.gitignore` chặn (`logs/**/*.{json,csv}`) — **không commit/chia sẻ**. Cần bản an toàn để đính báo cáo thì chạy `python3 scripts/phase6_scan_data_patterns.py --mask-all` (mọi giá trị đều mask).
+
+> Giá trị PII trong report luôn được mask (vd `***-**-1234`, `************1032`), nên file bằng chứng an toàn để commit/đính kèm báo cáo (mặc dù `.gitignore` đã loại nội dung log mặc định).
 
 ## Endpoint Local
 

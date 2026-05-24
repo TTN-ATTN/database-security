@@ -4,6 +4,7 @@
        audit-traffic parse-audit proxysql-audit check-phase3 phase3 tail-general tail-slow \
        proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
        load-test stress-conn check-phase5 phase5 \
+       scan-schema scan-data check-phase6 phase6 \
        clean clean-volumes \
        venv pip-install
 
@@ -141,6 +142,19 @@ check-phase5: ## Run Phase 5 performance monitoring verification end-to-end
 	bash scripts/phase5_check.sh
 
 phase5: check-phase5 ## Alias for check-phase5
+
+# ---------- phase 6: sensitive data discovery ----------
+
+scan-schema: ## Scan INFORMATION_SCHEMA for sensitive column names
+	python3 scripts/phase6_scan_schema.py
+
+scan-data: ## Scan sample rows for PII patterns (email/phone/card/SSN)
+	python3 scripts/phase6_scan_data_patterns.py
+
+check-phase6: ## Run Phase 6 sensitive data discovery verification end-to-end
+	bash scripts/phase6_check.sh
+
+phase6: check-phase6 ## Alias for check-phase6
 
 # ---------- cleanup ----------
 

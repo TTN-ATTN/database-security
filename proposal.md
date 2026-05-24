@@ -706,6 +706,7 @@ Bằng chứng:
 - Report liệt kê bảng/cột đáng nghi.
 - Report liệt kê dòng trong `activity_logs.notes` chứa PII.
 - Đề xuất xử lý cho từng phát hiện.
+- Cross-check masking/RBAC: với mỗi PII phát hiện, đối chiếu grants để xác định account low-priv (`appuser`) có đọc raw được không. Phân biệt `PROTECTED` (chỉ thấy qua view mask, vd `users`) và `EXPOSED` (đọc thẳng base table, vd `activity_logs.notes`), chỉ ra nơi masking/RBAC chưa đủ.
 
 ### 9.6 High Availability Database Cluster
 
@@ -945,10 +946,11 @@ Sản phẩm cuối cùng gồm:
 
 ### Phase 6 - Sensitive Data Discovery
 
-- [ ] Viết schema scanner.
-- [ ] Viết pattern scanner.
-- [ ] Export kết quả JSON/CSV.
-- [ ] Đề xuất remediation cho dữ liệu nhạy cảm phát hiện được.
+- [x] Viết schema scanner.
+- [x] Viết pattern scanner.
+- [x] Export kết quả JSON/CSV.
+- [x] Đề xuất remediation cho dữ liệu nhạy cảm phát hiện được.
+- [x] Cross-check masking/RBAC: đánh dấu PII mà account low-priv đọc raw được (EXPOSED vs PROTECTED).
 
 ### Phase 7 - High Availability Database Cluster
 
