@@ -106,6 +106,6 @@ fi
 echo
 echo "Phase 3 active-monitor checks passed."
 echo "Evidence (MySQL):    logs/mysql/general.log, logs/mysql/slow.log,"
-echo "                     logs/mysql/audit_report.json, logs/mysql/audit_summary.csv"
+echo "                     logs/audit/audit_report.json, logs/audit/audit_summary.csv"
 echo "Evidence (Phase 4):  logs/proxysql/proxysql_audit.json/.csv (if ProxySQL up),"
 echo "                     logs/acra/acra_audit.log (if acra-server up)"

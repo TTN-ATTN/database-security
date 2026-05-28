@@ -29,8 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs" / "mysql"
 GENERAL_LOG = LOG_DIR / "general.log"
 SLOW_LOG = LOG_DIR / "slow.log"
-REPORT_JSON = LOG_DIR / "audit_report.json"
-SUMMARY_CSV = LOG_DIR / "audit_summary.csv"
+AUDIT_DIR = ROOT / "logs" / "audit"
+REPORT_JSON = AUDIT_DIR / "audit_report.json"
+SUMMARY_CSV = AUDIT_DIR / "audit_summary.csv"
 
 PHASE3_TAG = re.compile(r"/\* phase3:([\w\-]+) \*/")
 GENERAL_LINE = re.compile(
@@ -157,6 +158,7 @@ def main():
     all_events = general + slow
     summary = summarize(all_events)
 
+    AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(all_events, indent=2, default=str), encoding="utf-8")
 
     with SUMMARY_CSV.open("w", newline="", encoding="utf-8") as f:

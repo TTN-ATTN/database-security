@@ -141,10 +141,10 @@ User / Admin / Test Scripts
           |
           v
 ProxySQL DBF
-(Query Rules / Deny Rules / Stats)
+(Query Rules / Deny Rules / Stats / Parse)
           |
           v
-Optional Acra Security/Evaluation Layer
+Acra Security/Evaluation Layer
 (Audit / Encryption / Masking / IDS / AcraCensor Attempt)
           |
           v

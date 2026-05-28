@@ -5,6 +5,7 @@
        proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
        load-test stress-conn check-phase5 phase5 \
        scan-schema scan-data check-phase6 phase6 \
+       phase7-chain phase7-ha phase7-full phase7 \
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
        clean clean-volumes \
@@ -159,6 +160,11 @@ check-phase6: ## Run Phase 6 sensitive data discovery verification end-to-end
 phase6: check-phase6 ## Alias for check-phase6
 
 # ---------- phase 7: chained data path + High Availability ----------
+
+phase7-chain: chain-up chain-verify ## Phase 7: chained path setup + verify
+phase7-ha: ha-bootstrap ha-verify ha-failover ## Phase 7: HA cluster setup + verify + failover
+phase7-full: full-up full-verify ## Phase 7: full integrated path setup + verify
+phase7: phase7-chain phase7-ha phase7-full regression ## Phase 7: run ALL sub-phases + regression
 
 chain-up: ## Phase 7: chained path Client->ProxySQL->Acra->MySQL (needs acra-keys)
 	bash scripts/phase7_chain_up.sh

@@ -22,7 +22,9 @@ echo
 echo "== Reverting front ProxySQL to default direct path =="
 docker compose up -d --force-recreate proxysql >/dev/null 2>&1 || true
 docker compose --profile acra stop acra-server >/dev/null 2>&1 || true
-sleep 3
+# Restart Grafana so bind-mount provisioning is fresh (Docker Desktop/WSL2 workaround)
+docker compose restart grafana >/dev/null 2>&1 || true
+sleep 5
 
 declare -a NAMES=( "Phase 1 (baseline)" "Phase 2 (masking/RBAC)" "Phase 3 (active monitor)" \
                    "Phase 4 (DBF + Acra)" "Phase 5 (perf monitoring)" "Phase 6 (discovery)" )

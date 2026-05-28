@@ -52,10 +52,12 @@ done
 echo
 echo "== 2. Prepare each node for Group Replication =="
 for n in "${NODES[@]}"; do
-  echo "  $n: reset GTIDs, create recovery user, set recovery channel"
-  # Clear GTIDs the docker-entrypoint generated (root@%, etc.) so all nodes start from
-  # an empty, identical GTID set. Create the recovery user WITHOUT binlog so it does
-  # not introduce a new errant transaction.
+  echo "  $n: stop GR if running, reset GTIDs, create recovery user, set recovery channel"
+  sql "$n" "STOP GROUP_REPLICATION;" 2>/dev/null || true
+  sql "$n" "SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF;" 2>/dev/null || true
+done
+sleep 2
+for n in "${NODES[@]}"; do
   sql "$n" "
     RESET BINARY LOGS AND GTIDS;
     SET SQL_LOG_BIN=0;

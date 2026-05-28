@@ -47,14 +47,18 @@ echo "alertmanager: ok"
 
 echo
 echo "== Grafana health =="
-curl -fsS "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/health" >/dev/null
-curl -fsS \
-  -u "${GRAFANA_ADMIN_USER}:${GRAFANA_ADMIN_PASSWORD}" \
-  "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/datasources/uid/prometheus" >/dev/null
-curl -fsS \
-  -u "${GRAFANA_ADMIN_USER}:${GRAFANA_ADMIN_PASSWORD}" \
-  "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/dashboards/uid/dbsec-phase1-overview" >/dev/null
-echo "grafana: ok"
+for i in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/health" >/dev/null 2>&1 \
+     && curl -fsS -u "${GRAFANA_ADMIN_USER}:${GRAFANA_ADMIN_PASSWORD}" \
+          "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/datasources/uid/prometheus" >/dev/null 2>&1 \
+     && curl -fsS -u "${GRAFANA_ADMIN_USER}:${GRAFANA_ADMIN_PASSWORD}" \
+          "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/dashboards/uid/dbsec-phase1-overview" >/dev/null 2>&1; then
+    echo "grafana: ok"
+    break
+  fi
+  [ "$i" = "30" ] && { echo "grafana: FAIL (not ready after 60s)" >&2; exit 1; }
+  sleep 2
+done
 
 echo
 echo "Phase 1 baseline checks passed."
