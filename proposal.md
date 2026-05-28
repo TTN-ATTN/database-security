@@ -954,13 +954,14 @@ Sản phẩm cuối cùng gồm:
 
 ### Phase 7 - High Availability Database Cluster
 
-- [ ] Chuẩn bị cấu hình 3 MySQL nodes.
-- [ ] Bootstrap MySQL InnoDB Cluster bằng MySQL Shell.
-- [ ] Thêm MySQL Router làm endpoint kết nối.
-- [ ] Kiểm tra replication và cluster status.
-- [ ] Dừng primary node để test failover.
-- [ ] Xác nhận client vẫn đọc/ghi qua router sau failover.
-- [ ] Thu thập screenshot/log/metrics làm bằng chứng.
+- [x] Chuẩn bị cấu hình 3 MySQL nodes (compose.ha.yaml, GR qua command flags).
+- [x] Bootstrap cluster (Group Replication thủ công bằng SQL — MySQL Shell image không pull được nên không dùng InnoDB Cluster/Shell).
+- [x] Thêm endpoint kết nối (ProxySQL GR-aware router thay MySQL Router — fallback §4.3, vì Router cần metadata do Shell tạo).
+- [x] Kiểm tra replication và cluster status (phase7_ha_verify.sh: 3/3 ONLINE, 1 writer).
+- [x] Dừng primary node để test failover (phase7_ha_failover.py).
+- [x] Xác nhận client vẫn đọc/ghi qua router sau failover (data còn nguyên, primary mới được bầu, node cũ rejoin).
+- [x] Thu thập bằng chứng (output script verify/failover; regression Phase 1-6).
+- [x] **(Thêm) Chained path** ProxySQL DBF → Acra encrypt → MySQL trên 1 đường (opt-in, giữ fallback — proposal §7.6); full path ghép cả HA cluster.
 
 ### Phase 8 - Kubernetes / Advanced
 

@@ -1,0 +1,37 @@
+# Phase 7 - FULL integrated path override:
+#   Client -> ProxySQL (DBF) -> Acra (encrypt) -> ha-router (GR) -> MySQL Cluster
+#
+# Layered on top of ALL the other files:
+#   docker compose -f compose.yaml -f compose.chained.yaml -f compose.ha.yaml \
+#                  -f compose.full.yaml --profile acra --profile ha up -d
+#
+# Pieces:
+#   - compose.chained.yaml  -> front ProxySQL backend = dbsec-acra-server
+#   - compose.ha.yaml       -> 3-node cluster + dbsec-ha-router
+#   - compose.full.yaml     -> (this) point Acra's backend at dbsec-ha-router instead
+#                              of the single dbsec-mysql, so encrypted writes land in
+#                              the HA cluster.
+#
+# Only acra-server's command changes (db_host/db_port). The command list is replaced
+# wholesale by compose, so the full Phase 4 command is repeated here with the two
+# backend flags pointed at the HA router.
+#
+# Use scripts/phase7_full_up.sh which orchestrates bootstrap + this layering.
+
+services:
+  acra-server:
+    command:
+      - --db_host=dbsec-ha-router
+      - --db_port=6033
+      - --mysql_enable
+      - --incoming_connection_string=tcp://0.0.0.0:9393
+      - --keys_dir=/keys
+      - --client_id=dbsec_client
+      - --encryptor_config_file=/configs/encryptor_config.yaml
+      - --tls_client_id_from_cert=false
+      - --audit_log_enable=true
+      - -v
+      - -d
+    depends_on:
+      ha-router:
+        condition: service_started

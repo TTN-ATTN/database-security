@@ -10,6 +10,7 @@ Trạng thái hiện tại của source code:
 - **Phase 4 - Database Firewall + Acra Encryption**: hoàn thành (ProxySQL DBF làm enforcement chính; Acra transparent encryption ở evaluation path).
 - **Phase 5 - Performance Monitoring**: hoàn thành (Grafana dashboard nâng cao, alert rules, load test, connection stress test).
 - **Phase 6 - Sensitive Data Discovery**: hoàn thành (schema scan theo tên cột + data pattern scan email/phone/card/SSN, phát hiện PII rò rỉ trong free-text, xuất JSON/CSV kèm remediation).
+- **Phase 7 - Chained path + High Availability**: hoàn thành (chained `ProxySQL→Acra→MySQL` opt-in giữ fallback; HA 3-node MySQL Group Replication + ProxySQL GR-router với failover; full integrated path + regression Phase 1-6).
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -67,6 +68,15 @@ Phase 6 hiện có:
 - **Data pattern scanner** ([scripts/phase6_scan_data_patterns.py](scripts/phase6_scan_data_patterns.py)): sample dữ liệu thật từ mọi cột text và match regex email / phone / credit card (validate Luhn + IIN prefix + length) / SSN. Phát hiện giá trị nhạy cảm thật, kể cả PII rò rỉ trong cột free-text tên vô hại như `activity_logs.notes` — chỗ mà masking theo view/RBAC sẽ **bỏ sót**.
 - **Masking/RBAC sufficiency cross-check** (trong cùng data scanner): mỗi finding kèm `access_verdict`. Scanner đọc grants từ `INFORMATION_SCHEMA.{SCHEMA,TABLE}_PRIVILEGES`, kiểm tra account low-priv (`appuser`, đổi qua `--app-users`) có `SELECT` trực tiếp lên **base table** chứa PII không. Đọc qua view mask = an toàn; đọc thẳng base table = raw → `EXPOSED`. Kết quả thực tế: `users.*` = `PROTECTED` (appuser chỉ thấy qua `users_masked`), còn `activity_logs.notes` = `EXPOSED` (appuser có `SELECT activity_logs` mà bảng này không có view mask). Đây là điểm nối Phase 6 ↔ Phase 2: discovery không chỉ tìm PII mà còn chỉ ra masking/RBAC **chưa đủ** ở đâu. Với mỗi finding `EXPOSED`, scanner ghi luôn **giá trị PII thật** (`exposed_values`) làm bằng chứng.
 - **Verification script** ([scripts/phase6_check.sh](scripts/phase6_check.sh)): chạy cả 2 pass, xác nhận artifacts, và in các cột raw PII mà low-priv account đọc được (lộ gì / ở đâu / vì sao).
+
+Phase 7 hiện có:
+
+- **Chained data path** (opt-in, giữ fallback): override [compose.chained.yaml](compose.chained.yaml) đổi backend ProxySQL từ `dbsec-mysql` sang `dbsec-acra-server`, tạo path `Client → ProxySQL (DBF) → Acra (encrypt) → MySQL` trên **một đường duy nhất**. Deny rule vẫn chặn tại ProxySQL **trước** khi tới Acra; secure_cards được Acra mã hóa rồi mới vào MySQL. Bật bằng [scripts/phase7_chain_up.sh](scripts/phase7_chain_up.sh), về default bằng [phase7_chain_down.sh](scripts/phase7_chain_down.sh) (proposal §7.6).
+- **High Availability cluster**: override [compose.ha.yaml](compose.ha.yaml) thêm 3 node MySQL 8.4 Group Replication (single-primary) + một ProxySQL **GR-aware** làm HA-router. Router tự theo dõi primary qua `read_only` + `performance_schema.replication_group_members`, route write tới primary, **tự reroute khi failover**. Bootstrap thủ công bằng SQL ([phase7_ha_bootstrap.sh](scripts/phase7_ha_bootstrap.sh)); failover demo ([phase7_ha_failover.py](scripts/phase7_ha_failover.py)) kill primary → cluster bầu primary mới → router reroute → data còn nguyên → node cũ rejoin.
+- **Full integrated path**: [compose.full.yaml](compose.full.yaml) + [phase7_full_up.sh](scripts/phase7_full_up.sh) ghép tất cả: `Client → ProxySQL (DBF) → Acra (encrypt) → ha-router (GR) → MySQL Cluster`. [phase7_full_verify.py](scripts/phase7_full_verify.py) chứng minh 4 lớp cùng hoạt động.
+- **Regression** ([phase7_regression.sh](scripts/phase7_regression.sh)): revert về default mode rồi chạy lại check Phase 1-6, đảm bảo các phase trước không vỡ.
+
+> **Lưu ý MySQL Router → ProxySQL-GR:** proposal định dùng MySQL Router cho HA endpoint, nhưng auto-failover của Router cần InnoDB Cluster metadata do **MySQL Shell** tạo, mà image MySQL Shell không pull được công khai (Oracle gate auth). Theo nguyên tắc fallback §4.3, dùng **ProxySQL cấu hình Group Replication** thay thế — cùng vai trò (HA endpoint ổn định, tự reroute), dùng image đã có. Group Replication vẫn là MySQL GR 3-node thật.
 
 ### Lưu ý kiến trúc Phase 4
 
@@ -323,7 +333,43 @@ Bằng chứng Phase 6 sau khi chạy (trong `logs/discovery/`):
 
 > ⚠️ Mặc định, finding `EXPOSED` ghi PII **thật** vào `exposed_values` làm bằng chứng tuyệt đối. Vì vậy `data_findings.json/.csv` đã được `.gitignore` chặn (`logs/**/*.{json,csv}`) — **không commit/chia sẻ**. Cần bản an toàn để đính báo cáo thì chạy `python3 scripts/phase6_scan_data_patterns.py --mask-all` (mọi giá trị đều mask).
 
-> Giá trị PII trong report luôn được mask (vd `***-**-1234`, `************1032`), nên file bằng chứng an toàn để commit/đính kèm báo cáo (mặc dù `.gitignore` đã loại nội dung log mặc định).
+## Chạy Phase 7 - Chained Path + High Availability
+
+Phase 7 là các chế độ **opt-in** chồng lên stack mặc định bằng compose override; default `docker compose up -d` không đổi nên Phase 1-6 chạy nguyên.
+
+### Chained path (DBF + encryption trên 1 đường)
+
+Cần Acra keystore trước (`make acra-keys`). Sau đó:
+
+```bash
+make chain-up        # ProxySQL -> Acra -> MySQL, nạp deny rules
+make chain-verify    # DROP bị chặn ở ProxySQL; secure_cards mã hóa qua Acra
+make chain-down      # về default ProxySQL -> MySQL
+```
+
+### High Availability (3-node Group Replication + failover)
+
+```bash
+make ha-bootstrap    # tạo 3 node GR + ProxySQL GR-router (~vài phút, cần ~1.5GB RAM)
+make ha-verify       # 3/3 ONLINE, đúng 1 primary, round-trip qua router
+make ha-failover     # kill primary -> bầu primary mới -> router reroute -> data còn
+make ha-down         # gỡ cluster + router (volume HA bị xóa, base stack giữ nguyên)
+```
+
+HA router endpoint: `127.0.0.1:6450` (R/W, qua dbfuser). Group Replication cần số node lẻ (≥3) để có quorum; cụm 3 node chịu được 1 node chết.
+
+### Full integrated path
+
+```bash
+make full-up         # ProxySQL(DBF) -> Acra(encrypt) -> ha-router(GR) -> Cluster
+make full-verify     # chứng minh cả 4 lớp cùng hoạt động trên 1 chain
+```
+
+### Regression (đảm bảo Phase 1-6 không vỡ)
+
+```bash
+make regression      # revert default mode + chạy lại toàn bộ check Phase 1-6
+```
 
 ## Endpoint Local
 
@@ -339,6 +385,7 @@ Các service chỉ bind vào `127.0.0.1`:
 | Prometheus | `http://127.0.0.1:${PROMETHEUS_HOST_PORT}` mặc định `9090` |
 | Alertmanager | `http://127.0.0.1:${ALERTMANAGER_HOST_PORT}` mặc định `9093` |
 | Grafana | `http://127.0.0.1:${GRAFANA_HOST_PORT}` mặc định `3000` |
+| HA router (Phase 7, profile `ha`) | `127.0.0.1:6450` R/W, admin `127.0.0.1:6452` |
 
 Grafana mặc định:
 

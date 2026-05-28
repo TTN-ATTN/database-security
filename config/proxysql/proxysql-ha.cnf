@@ -1,0 +1,71 @@
+#######################################################################################
+# Phase 7 - ProxySQL as a Group-Replication-aware HA router.
+#
+# Stands in for MySQL Router (see compose.ha.yaml note). ProxySQL monitors the three
+# GR nodes and keeps exactly one (the primary, read_only=OFF) in the writer hostgroup;
+# secondaries go to the reader hostgroup. On failover it detects the newly elected
+# primary and moves it into the writer hostgroup automatically, so clients connected
+# to port 6033 keep working without knowing which node is primary.
+#
+# Hostgroups:
+#   2 = writer (current primary)      3 = reader (secondaries)
+#   4 = backup writer                 1 = offline (unreachable / errant)
+#######################################################################################
+
+datadir="/var/lib/proxysql"
+errorlog="/var/lib/proxysql/proxysql.log"
+
+admin_variables=
+{
+    admin_credentials="admin:admin;radmin:radmin"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=2
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    server_version="8.4.0"
+    monitor_username="monitor"
+    monitor_password="monitorpass"
+    monitor_connect_interval=20000
+    monitor_ping_interval=10000
+    monitor_read_only_interval=1500
+    monitor_read_only_timeout=500
+    connect_timeout_server=3000
+    commands_stats=true
+    sessions_sort=true
+}
+
+# All three nodes start in the writer hostgroup (2); ProxySQL's GR monitor reclassifies
+# secondaries into the reader hostgroup (3) based on read_only + GR membership.
+mysql_servers=
+(
+    { address="dbsec-mysql-1", port=3306, hostgroup=2, max_connections=200 },
+    { address="dbsec-mysql-2", port=3306, hostgroup=2, max_connections=200 },
+    { address="dbsec-mysql-3", port=3306, hostgroup=2, max_connections=200 }
+)
+
+# Group Replication topology mapping. ProxySQL tracks the primary and fails over.
+mysql_group_replication_hostgroups=
+(
+    {
+        writer_hostgroup=2,
+        backup_writer_hostgroup=4,
+        reader_hostgroup=3,
+        offline_hostgroup=1,
+        active=1,
+        max_writers=1,
+        writer_is_also_reader=0,
+        max_transactions_behind=100
+    }
+)
+
+# Client user. default_hostgroup=2 -> all traffic goes to the current primary, which is
+# all we need for a single-primary failover demo (no read/write split).
+mysql_users=
+(
+    { username="dbfuser", password="dbfpass", default_hostgroup=2, active=1,
+      transaction_persistent=1 }
+)

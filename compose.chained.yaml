@@ -1,0 +1,31 @@
+# Phase 7 - Chained data path override: Client -> ProxySQL DBF -> Acra -> MySQL.
+#
+# Layer this on top of compose.yaml and bring Acra into the default project via the
+# 'acra' profile:
+#   docker compose -f compose.yaml -f compose.chained.yaml --profile acra up -d
+#
+# It does two things:
+#   1. Mounts a second ProxySQL config (proxysql.chained.cnf) at a NEW path
+#      (/etc/proxysql-chained.cnf) and overrides the container command to read THAT
+#      file. The default proxysql.cnf stays mounted but is ignored by this command.
+#      We use a different path because compose merges service `volumes:` additively;
+#      mounting two files at the same target would collide.
+#   2. Makes ProxySQL wait for acra-server to start (chained mode requires Acra up).
+#
+# Stopping chained mode: bring the stack back up without this override file:
+#   docker compose up -d
+# ProxySQL recreates with the original config and points back at MySQL directly.
+# This is the documented fallback per proposal section 7.6.
+
+services:
+  proxysql:
+    depends_on:
+      mysql:
+        condition: service_healthy
+      acra-server:
+        condition: service_started
+    volumes:
+      - ./config/proxysql/proxysql.chained.cnf:/etc/proxysql-chained.cnf:ro
+    # ProxySQL's default CMD is `proxysql -f --idle-threads -c /etc/proxysql.cnf`.
+    # Override the config path so it reads the chained backend definition.
+    command: ["proxysql", "-f", "--idle-threads", "-c", "/etc/proxysql-chained.cnf"]

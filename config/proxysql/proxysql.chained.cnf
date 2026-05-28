@@ -1,0 +1,56 @@
+#######################################################################################
+# Phase 7 - Chained data path: Client -> ProxySQL (DBF) -> Acra (encrypt) -> MySQL.
+#
+# Differences from the default proxysql.cnf:
+#   - mysql_servers.address = dbsec-acra-server:9393 (ProxySQL talks MySQL protocol to
+#     Acra, which then talks to dbsec-mysql:3306). ProxySQL stays the policy enforcer;
+#     Acra adds transparent encryption for the configured columns (secure_cards).
+#   - multiplex=0 on the user. Acra keeps per-connection state (client_id binding,
+#     handshake). If ProxySQL fanned out multiple frontend sessions across one shared
+#     backend connection, Acra would see them as one client and could mis-handle
+#     session state. Pinning multiplex=0 makes ProxySQL keep a 1:1 backend conn per
+#     frontend, which is the safe default for a non-load-balanced policy chain.
+#
+# Query rules are still loaded via scripts/phase4_proxysql_setup.sh and apply BEFORE
+# the query reaches Acra, so DROP/TRUNCATE/etc. are denied at ProxySQL even when
+# Acra is in the path.
+#######################################################################################
+
+datadir="/var/lib/proxysql"
+errorlog="/var/lib/proxysql/proxysql.log"
+
+admin_variables=
+{
+    admin_credentials="admin:admin;radmin:radmin"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=2
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    server_version="8.4.0"
+    monitor_username="monitor"
+    monitor_password="monitorpass"
+    monitor_connect_interval=60000
+    monitor_ping_interval=10000
+    monitor_read_only_interval=1500
+    connect_timeout_server=3000
+    commands_stats=true
+    sessions_sort=true
+}
+
+# Backend = Acra. Acra forwards to dbsec-mysql:3306 internally.
+mysql_servers=
+(
+    { address="dbsec-acra-server", port=9393, hostgroup=0, max_connections=200 }
+)
+
+# dbfuser with multiplex=0: each frontend session pins its own backend connection so
+# Acra's per-connection state (client_id, handshake) is preserved end-to-end.
+mysql_users=
+(
+    { username="dbfuser", password="dbfpass", default_hostgroup=0, active=1,
+      transaction_persistent=1, multiplex=0 }
+)

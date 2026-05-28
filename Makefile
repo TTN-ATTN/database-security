@@ -5,6 +5,8 @@
        proxysql-setup dbf-test acra-keys acra-up acra-down enc-test check-phase4 phase4 \
        load-test stress-conn check-phase5 phase5 \
        scan-schema scan-data check-phase6 phase6 \
+       chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
+       full-up full-verify regression \
        clean clean-volumes \
        venv pip-install
 
@@ -155,6 +157,38 @@ check-phase6: ## Run Phase 6 sensitive data discovery verification end-to-end
 	bash scripts/phase6_check.sh
 
 phase6: check-phase6 ## Alias for check-phase6
+
+# ---------- phase 7: chained data path + High Availability ----------
+
+chain-up: ## Phase 7: chained path Client->ProxySQL->Acra->MySQL (needs acra-keys)
+	bash scripts/phase7_chain_up.sh
+
+chain-down: ## Phase 7: revert to default direct path Client->ProxySQL->MySQL
+	bash scripts/phase7_chain_down.sh
+
+chain-verify: ## Phase 7: verify chained path (DBF deny + Acra encrypt on one path)
+	python3 scripts/phase7_chain_verify.py
+
+ha-bootstrap: ## Phase 7: bootstrap 3-node GR cluster + ProxySQL GR router
+	bash scripts/phase7_ha_bootstrap.sh
+
+ha-verify: ## Phase 7: verify HA cluster health + router primary tracking
+	bash scripts/phase7_ha_verify.sh
+
+ha-failover: ## Phase 7: kill primary, prove cluster re-elects + router reroutes
+	python3 scripts/phase7_ha_failover.py
+
+ha-down: ## Phase 7: tear down HA cluster + router (base stack untouched)
+	bash scripts/phase7_ha_down.sh
+
+full-up: ## Phase 7: full path ProxySQL->Acra->ha-router->Cluster
+	bash scripts/phase7_full_up.sh
+
+full-verify: ## Phase 7: verify full integrated path (DBF + encrypt + HA)
+	python3 scripts/phase7_full_verify.py
+
+regression: ## Phase 7: confirm Phases 1-6 still pass in default mode
+	bash scripts/phase7_regression.sh
 
 # ---------- cleanup ----------
 
