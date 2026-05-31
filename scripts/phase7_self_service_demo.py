@@ -33,7 +33,7 @@ import pymysql
 
 load_dotenv()
 
-# Must match the secret hard-coded inside mysql/phase8_classification.sql.
+# Must match the secret hard-coded inside mysql/phase7_5_classification.sql.
 SECRET = "self_service_secret"
 
 CFG = {

@@ -15,8 +15,8 @@ tests).
 Skips rows that already look encrypted (start with the AcraStruct magic prefix), so
 the script is safe to re-run.
 
-Run from the project root after scripts/phase8_apply.sh's earlier steps:
-  python3 scripts/phase8_encrypt_users_pii.py
+Run from the project root after scripts/phase7_5_apply.sh's earlier steps:
+  python3 scripts/phase7_5_encrypt_users_pii.py
 """
 
 import os

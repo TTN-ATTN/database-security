@@ -17,7 +17,7 @@ run_app()  { docker exec "$CONTAINER" mysql -u"$APP_USER" -p"$APP_PASS" -N -e "$
 
 # NOTE: ssn / credit_card moved to the Phase 7.5 Tier 1 (encrypt-at-rest @ Acra) and
 # are no longer projected by users_masked. Tier 1 access is exercised by
-# scripts/phase8_verify.py (support denied, fraud sees decrypted, DBA sees ciphertext).
+# scripts/phase7_5_verify.py (support denied, fraud sees decrypted, DBA sees ciphertext).
 # This test focuses on Phase 2's Tier 2 columns (email, phone, address).
 
 divider "1. Root reads raw users table (first 5 rows) - Tier 2 columns"

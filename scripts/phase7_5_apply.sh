@@ -2,21 +2,21 @@
 # Phase 7.5 (Data Classification) - apply the refactor end-to-end.
 #
 # Order matters and is non-trivial:
-#   1. Apply mysql/phase8_classification.sql: widen ssn/cc to VARBINARY, recreate the
+#   1. Apply mysql/phase7_5_classification.sql: widen ssn/cc to VARBINARY, recreate the
 #      masked view without ssn/cc, create support/fraud users + RBAC tiers.
 #   2. Recreate acra-server with the updated encryptor_config (now covers users.ssn/cc)
 #      AND recreate proxysql with the chained config (which carries support/fraud
 #      passthrough users). Done as a single `compose ... up -d --force-recreate` so the
 #      stack arrives in chained mode in one shot.
 #   3. Load Phase 4 DBF deny rules into the freshly recreated ProxySQL.
-#   4. Run phase8_encrypt_users_pii.py: walks existing rows (which still hold plaintext
+#   4. Run phase7_5_encrypt_users_pii.py: walks existing rows (which still hold plaintext
 #      bytes after the ALTER) and UPDATEs ssn/cc through the chain so Acra encrypts
 #      them in place. After this, MySQL stores AcraStruct ciphertext for those columns.
 #
 # Prereqs: stack is up (base or chained), ACRA_MASTER_KEY in .env (make acra-keys).
 #
 # Run from the project root:
-#   bash scripts/phase8_apply.sh
+#   bash scripts/phase7_5_apply.sh
 
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,8 +38,8 @@ echo
 echo "== 1. Apply schema migration (widen columns, rebuild view, add users + RBAC) =="
 # Keep stderr visible so a failing GRANT/ALTER/etc. is not silently swallowed.
 docker exec -i dbsec-mysql sh -c "exec mysql -uroot -p'$ROOTPW' 2> >(grep -v '\\[Warning\\] Using a password' >&2)" \
-    < mysql/phase8_classification.sql
-echo "  applied mysql/phase8_classification.sql"
+    < mysql/phase7_5_classification.sql
+echo "  applied mysql/phase7_5_classification.sql"
 
 echo
 echo "== 2. Bring stack up in chained mode with new Acra encryptor + ProxySQL users =="
@@ -62,8 +62,8 @@ bash scripts/phase4_proxysql_setup.sh >/dev/null
 
 echo
 echo "== 5. Encrypt existing users.ssn / users.credit_card in place via Acra =="
-python3 scripts/phase8_encrypt_users_pii.py
+python3 scripts/phase7_5_encrypt_users_pii.py
 
 echo
 echo "Phase 7.5 applied. Verify with:"
-echo "  python3 scripts/phase8_verify.py"
+echo "  python3 scripts/phase7_5_verify.py"

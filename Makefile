@@ -197,10 +197,10 @@ regression: ## Phase 7: confirm Phases 1-6 still pass in default mode
 # ---------- phase 7.5: data classification (3-tier: encrypt / mask / clear) ----------
 
 classify-apply: ## Phase 7.5: migrate schema + Acra/ProxySQL config + encrypt ssn/cc in place
-	bash scripts/phase8_apply.sh
+	bash scripts/phase7_5_apply.sh
 
 classify-verify: ## Phase 7.5: verify support=masked, fraud=decrypted, DBA=ciphertext, self=own-row
-	python3 scripts/phase8_verify.py
+	python3 scripts/phase7_5_verify.py
 
 self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure gate
 	python3 scripts/phase7_self_service_demo.py

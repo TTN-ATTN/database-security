@@ -52,7 +52,7 @@ DBA = {"host": CHAIN_HOST, "port": int(os.getenv("MYSQL_HOST_PORT", "3307")),
        "user": "root", "password": os.getenv("MYSQL_ROOT_PASSWORD", "rootpass"),
        "database": DB}
 
-SELF_SECRET = "self_service_secret"  # mirrors mysql/phase8_classification.sql
+SELF_SECRET = "self_service_secret"  # mirrors mysql/phase7_5_classification.sql
 
 
 def self_token(customer_id):

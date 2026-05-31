@@ -374,12 +374,12 @@ Mục tiêu:
 
 Cách hiện thực:
 
-- **Migration SQL** (`mysql/phase8_classification.sql`): widen `users.ssn` / `users.credit_card` lên `VARBINARY(512)` để chứa AcraStruct (~161-169 byte/giá trị); rebuild view `users_masked` mới (bỏ ssn/cc vì chỉ MySQL không có key thì mask trên byte ra rác); tạo 3 user mới `support`/`fraud`/`self_service` với grants đúng tier; định nghĩa stored procedure `get_my_profile(customer_id, self_token)` với token check + `SIGNAL SQLSTATE '45000'` khi sai/thiếu token. Idempotent (DROP+CREATE user/proc; ALTER là no-op khi cột đã đúng type).
+- **Migration SQL** (`mysql/phase7_5_classification.sql`): widen `users.ssn` / `users.credit_card` lên `VARBINARY(512)` để chứa AcraStruct (~161-169 byte/giá trị); rebuild view `users_masked` mới (bỏ ssn/cc vì chỉ MySQL không có key thì mask trên byte ra rác); tạo 3 user mới `support`/`fraud`/`self_service` với grants đúng tier; định nghĩa stored procedure `get_my_profile(customer_id, self_token)` với token check + `SIGNAL SQLSTATE '45000'` khi sai/thiếu token. Idempotent (DROP+CREATE user/proc; ALTER là no-op khi cột đã đúng type).
 - **Acra encryptor config** (`config/acra/encryptor_config.yaml`): thêm khai báo cột `users.ssn` + `users.credit_card` được mã hóa dưới `client_id=dbsec_client`. Acra transparent: app vẫn `INSERT … VALUES('792-38-1308', ...)` và `SELECT ssn FROM users` như bình thường.
 - **ProxySQL passthrough auth** (`config/proxysql/*.cnf`): thêm `support`/`fraud`/`self_service` vào `mysql_users` để ProxySQL pass-through — username giữ nguyên xuống MySQL → MySQL áp đúng RBAC + view masking + stored-procedure gate cho từng người. ProxySQL không terminate auth, chỉ re-auth user xuống backend.
-- **Apply orchestration** (`scripts/phase8_apply.sh`): chạy migration → force-recreate `acra-server` + `proxysql` để pick up config mới → reload Phase 4 DBF deny rules → encrypt-in-place 1000 row existing data (đọc plaintext qua MySQL direct, `UPDATE` qua chained path để Acra encrypt).
-- **Idempotency**: `scripts/phase8_encrypt_users_pii.py` detect prefix `25 25 25` của AcraStruct và skip row đã encrypted, nên re-run không double-encrypt. Lần 2 báo `encrypted 0, skipped 1000`.
-- **Verify 4 role cùng lúc** (`scripts/phase8_verify.py`): tự kiểm `support → masked`, `fraud → decrypted`, `self_service → own-row-only + IDOR-blocked + direct-table-denied`, `DBA direct → ciphertext`.
+- **Apply orchestration** (`scripts/phase7_5_apply.sh`): chạy migration → force-recreate `acra-server` + `proxysql` để pick up config mới → reload Phase 4 DBF deny rules → encrypt-in-place 1000 row existing data (đọc plaintext qua MySQL direct, `UPDATE` qua chained path để Acra encrypt).
+- **Idempotency**: `scripts/phase7_5_encrypt_users_pii.py` detect prefix `25 25 25` của AcraStruct và skip row đã encrypted, nên re-run không double-encrypt. Lần 2 báo `encrypted 0, skipped 1000`.
+- **Verify 4 role cùng lúc** (`scripts/phase7_5_verify.py`): tự kiểm `support → masked`, `fraud → decrypted`, `self_service → own-row-only + IDOR-blocked + direct-table-denied`, `DBA direct → ciphertext`.
 - **Self-service demo riêng** (`scripts/phase7_self_service_demo.py`): 4 case rõ ràng (correct token, cross-customer enumeration attempt, missing token, bypass attempt qua direct SELECT) → chứng minh không có cửa hậu.
 
 Giới hạn / Threat model:
