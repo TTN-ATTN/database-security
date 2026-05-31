@@ -333,7 +333,59 @@ Mục tiêu:
 - Dùng MySQL Router làm endpoint ổn định cho client, ProxySQL và optional Acra layer.
 - Kiểm tra cluster status, replication health và vai trò từng node.
 - Demo failover bằng cách dừng primary node, xác nhận primary mới được bầu và client vẫn truy cập qua router.
-- Ghi lại giới hạn của đồ án: chưa triển khai multi-region DR, backup automation production-grade hoặc chaos testing nâng cao.
+- **Read/Write split**: tận dụng đúng 3 node thay vì để 2 secondary stand-by — ProxySQL HA-router phân `^SELECT` / `^SHOW` về reader hostgroup (secondaries) và writes về writer hostgroup (primary). `SELECT … FOR UPDATE/FOR SHARE` lock buộc về writer. Demo dùng `stats_mysql_query_digest` của ProxySQL làm bằng chứng tự audit routing, không phải đoán. Sống sót qua failover (writer hostgroup tự cập nhật primary mới).
+- Ghi lại giới hạn của đồ án: chưa triển khai multi-region DR, backup automation production-grade hoặc chaos testing nâng cao; ProxySQL HA-router bản thân vẫn là SPOF (production cần keepalived/VIP hoặc cloud LB trước nó).
+
+### 6.7b Phase 7.5 - Data Classification (4-Role) trên Chained Path
+
+```text
+Client (support / fraud / self_service / app)
+          |
+          v
+ProxySQL (DBF + passthrough auth: username giữ nguyên)
+          |
+          v
+Acra (encrypt ssn/cc on write, decrypt on read theo client_id + grant)
+          |
+          v
+MySQL (RBAC + view masking + stored-procedure gate theo username thật)
+
+  Tier 1 (Encrypt @ Acra)  : ssn, credit_card        -> VARBINARY(512) AcraStruct
+  Tier 2 (Mask  @ MySQL)   : email, phone, address   -> view users_masked
+  Tier 3 (Clear)           : id, names, timestamps
+
+  4 role bám trên 3 tier dữ liệu:
+    - support      : Tier 2 + Tier 3 (qua view), bị deny raw users.
+    - fraud        : Tier 1 + 2 + 3 (raw users, Acra decrypt).
+    - self_service : Tier 1+2+3 nhưng CHỈ row của chính mình, qua stored procedure
+                     get_my_profile(id, token) với token-bound auth (IDOR-resistant).
+    - DBA direct   : chỉ ciphertext (no Acra in path).
+```
+
+Mục tiêu:
+
+- Phân loại dữ liệu theo 3 tier rõ ràng (encrypt / mask / clear) thay vì xử lý tất cả PII bằng cùng một cơ chế. Áp dụng kỹ thuật phù hợp với từng tier: cột nhạy cảm nhất (ssn/cc) encrypt-at-rest qua Acra; cột PII nhưng dùng hằng ngày (email/phone/address) chỉ mask cho low-priv role; còn lại để clear.
+- Đảm bảo **mọi role đều đi qua cùng 1 chain** `ProxySQL → Acra → MySQL` — tức firewall enforce trước cho tất cả; không có lỗ hổng "support team bypass" hay "privileged client connect thẳng Acra".
+- Sai phân quyền **per-user**, không phải per-app:
+  - `support` (low-priv): grant `SELECT users_masked` + `SELECT orders` + `SELECT activity_logs`; bị deny `SELECT users`. Nhìn thấy `j***@example.net` / `***-***-3890` / `265**********...`.
+  - `fraud` (need-to-know): grant `SELECT users` đầy đủ → đọc raw, ssn/cc được Acra tự decrypt trên đường về. Mọi truy cập được capture bởi general.log (Phase 3 audit pipeline). Naming `fraud` đại diện cho cụm role business cần raw PII: fraud investigation, compliance officer, subpoena response, AML analyst.
+  - `self_service` (khách đọc data của chính mình): **không** có SELECT trực tiếp trên `users`; chỉ có `EXECUTE` trên stored procedure `get_my_profile(customer_id, self_token)`. Token = `SHA2(customer_id || ':self_service_secret', 256)` — app server-side compute với secret từ vault, simulate "proof of self-auth" sau khi đã login + step-up auth. Procedure check token MATCH với customer_id → trả row → Acra decrypt ssn/cc trên đường về. **Chống IDOR ngay tại DB**: caller bump id từ 1 lên 2 cũng vô ích vì token cho 1 ≠ token cho 2.
+  - DBA (operations) direct vào MySQL `3307`, không có Acra trong đường → thấy ciphertext at rest. **DBA quản trị DB nhưng không giữ key** → separation of duties.
+
+Cách hiện thực:
+
+- **Migration SQL** (`mysql/phase8_classification.sql`): widen `users.ssn` / `users.credit_card` lên `VARBINARY(512)` để chứa AcraStruct (~161-169 byte/giá trị); rebuild view `users_masked` mới (bỏ ssn/cc vì chỉ MySQL không có key thì mask trên byte ra rác); tạo 3 user mới `support`/`fraud`/`self_service` với grants đúng tier; định nghĩa stored procedure `get_my_profile(customer_id, self_token)` với token check + `SIGNAL SQLSTATE '45000'` khi sai/thiếu token. Idempotent (DROP+CREATE user/proc; ALTER là no-op khi cột đã đúng type).
+- **Acra encryptor config** (`config/acra/encryptor_config.yaml`): thêm khai báo cột `users.ssn` + `users.credit_card` được mã hóa dưới `client_id=dbsec_client`. Acra transparent: app vẫn `INSERT … VALUES('792-38-1308', ...)` và `SELECT ssn FROM users` như bình thường.
+- **ProxySQL passthrough auth** (`config/proxysql/*.cnf`): thêm `support`/`fraud`/`self_service` vào `mysql_users` để ProxySQL pass-through — username giữ nguyên xuống MySQL → MySQL áp đúng RBAC + view masking + stored-procedure gate cho từng người. ProxySQL không terminate auth, chỉ re-auth user xuống backend.
+- **Apply orchestration** (`scripts/phase8_apply.sh`): chạy migration → force-recreate `acra-server` + `proxysql` để pick up config mới → reload Phase 4 DBF deny rules → encrypt-in-place 1000 row existing data (đọc plaintext qua MySQL direct, `UPDATE` qua chained path để Acra encrypt).
+- **Idempotency**: `scripts/phase8_encrypt_users_pii.py` detect prefix `25 25 25` của AcraStruct và skip row đã encrypted, nên re-run không double-encrypt. Lần 2 báo `encrypted 0, skipped 1000`.
+- **Verify 4 role cùng lúc** (`scripts/phase8_verify.py`): tự kiểm `support → masked`, `fraud → decrypted`, `self_service → own-row-only + IDOR-blocked + direct-table-denied`, `DBA direct → ciphertext`.
+- **Self-service demo riêng** (`scripts/phase7_self_service_demo.py`): 4 case rõ ràng (correct token, cross-customer enumeration attempt, missing token, bypass attempt qua direct SELECT) → chứng minh không có cửa hậu.
+
+Giới hạn / Threat model:
+
+- DBA + Acra-admin nếu cùng 1 người → vẫn đọc được PII. Trong môi trường đồ án, đây là giả định "tin DBA"; production cần tách thực sự (Acra key tách HSM, audit luôn) — ghi rõ ở phạm vi.
+- `fraud` đọc raw nhưng mọi query của họ được log Phase 3 (general.log + ProxySQL digest) → ai đọc PII là verifiable.
 
 ### 6.8 Phase 8 - Advanced Kubernetes / Cloud Extension
 

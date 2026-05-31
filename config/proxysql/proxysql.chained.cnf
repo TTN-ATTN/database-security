@@ -47,10 +47,17 @@ mysql_servers=
     { address="dbsec-acra-server", port=9393, hostgroup=0, max_connections=200 }
 )
 
-# dbfuser with multiplex=0: each frontend session pins its own backend connection so
-# Acra's per-connection state (client_id, handshake) is preserved end-to-end.
+# dbfuser/support/fraud/self_service with multiplex=0: each frontend session pins its
+# own backend connection so Acra's per-connection handshake and the username it
+# propagates to MySQL stay 1:1 per end user. Phase 7.5 + self-service passthrough.
 mysql_users=
 (
-    { username="dbfuser", password="dbfpass", default_hostgroup=0, active=1,
+    { username="dbfuser",      password="dbfpass",     default_hostgroup=0, active=1,
+      transaction_persistent=1, multiplex=0 },
+    { username="support",      password="supportpass", default_hostgroup=0, active=1,
+      transaction_persistent=1, multiplex=0 },
+    { username="fraud",        password="fraudpass",   default_hostgroup=0, active=1,
+      transaction_persistent=1, multiplex=0 },
+    { username="self_service", password="selfpass",    default_hostgroup=0, active=1,
       transaction_persistent=1, multiplex=0 }
 )

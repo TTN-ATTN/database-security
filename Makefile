@@ -7,6 +7,7 @@
        scan-schema scan-data check-phase6 phase6 \
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
+       classify-apply classify-verify self-service-demo ha-rw-demo \
        clean clean-volumes \
        venv pip-install
 
@@ -178,6 +179,9 @@ ha-verify: ## Phase 7: verify HA cluster health + router primary tracking
 ha-failover: ## Phase 7: kill primary, prove cluster re-elects + router reroutes
 	python3 scripts/phase7_ha_failover.py
 
+ha-rw-demo: ## Phase 7: prove R/W split (writes->primary, reads->secondaries) via ha-router
+	python3 scripts/phase7_ha_rw_demo.py
+
 ha-down: ## Phase 7: tear down HA cluster + router (base stack untouched)
 	bash scripts/phase7_ha_down.sh
 
@@ -189,6 +193,17 @@ full-verify: ## Phase 7: verify full integrated path (DBF + encrypt + HA)
 
 regression: ## Phase 7: confirm Phases 1-6 still pass in default mode
 	bash scripts/phase7_regression.sh
+
+# ---------- phase 7.5: data classification (3-tier: encrypt / mask / clear) ----------
+
+classify-apply: ## Phase 7.5: migrate schema + Acra/ProxySQL config + encrypt ssn/cc in place
+	bash scripts/phase8_apply.sh
+
+classify-verify: ## Phase 7.5: verify support=masked, fraud=decrypted, DBA=ciphertext, self=own-row
+	python3 scripts/phase8_verify.py
+
+self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure gate
+	python3 scripts/phase7_self_service_demo.py
 
 # ---------- cleanup ----------
 

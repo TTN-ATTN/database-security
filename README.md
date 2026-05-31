@@ -10,7 +10,8 @@ Trạng thái hiện tại của source code:
 - **Phase 4 - Database Firewall + Acra Encryption**: hoàn thành (ProxySQL DBF làm enforcement chính; Acra transparent encryption ở evaluation path).
 - **Phase 5 - Performance Monitoring**: hoàn thành (Grafana dashboard nâng cao, alert rules, load test, connection stress test).
 - **Phase 6 - Sensitive Data Discovery**: hoàn thành (schema scan theo tên cột + data pattern scan email/phone/card/SSN, phát hiện PII rò rỉ trong free-text, xuất JSON/CSV kèm remediation).
-- **Phase 7 - Chained path + High Availability**: hoàn thành (chained `ProxySQL→Acra→MySQL` opt-in giữ fallback; HA 3-node MySQL Group Replication + ProxySQL GR-router với failover; full integrated path + regression Phase 1-6).
+- **Phase 7 - Chained path + High Availability**: hoàn thành (chained `ProxySQL→Acra→MySQL` opt-in giữ fallback; HA 3-node MySQL Group Replication + ProxySQL GR-router với failover **+ R/W split** writes→primary, reads→secondaries; full integrated path + regression Phase 1-6).
+- **Phase 7.5 - Data Classification (4-tier role model)**: hoàn thành (Tier 1 Encrypt-at-Acra cho `ssn`/`credit_card`; Tier 2 Mask-at-MySQL cho `email`/`phone`/`address`; Tier 3 Clear cho `id`/tên/timestamp). 4 MySQL identity với 4 quyền khác nhau: `support` (chỉ thấy masked view, bị deny raw `users`), `fraud` (need-to-know, đọc raw + Acra decrypt), `self_service` (khách đọc **đúng row của mình** qua stored procedure có token check, chống IDOR), DBA direct chỉ thấy ciphertext → separation of duties: DBA giữ DB nhưng không giữ key.
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -73,8 +74,27 @@ Phase 7 hiện có:
 
 - **Chained data path** (opt-in, giữ fallback): override [compose.chained.yaml](compose.chained.yaml) đổi backend ProxySQL từ `dbsec-mysql` sang `dbsec-acra-server`, tạo path `Client → ProxySQL (DBF) → Acra (encrypt) → MySQL` trên **một đường duy nhất**. Deny rule vẫn chặn tại ProxySQL **trước** khi tới Acra; secure_cards được Acra mã hóa rồi mới vào MySQL. Bật bằng [scripts/phase7_chain_up.sh](scripts/phase7_chain_up.sh), về default bằng [phase7_chain_down.sh](scripts/phase7_chain_down.sh) (proposal §7.6).
 - **High Availability cluster**: override [compose.ha.yaml](compose.ha.yaml) thêm 3 node MySQL 8.4 Group Replication (single-primary) + một ProxySQL **GR-aware** làm HA-router. Router tự theo dõi primary qua `read_only` + `performance_schema.replication_group_members`, route write tới primary, **tự reroute khi failover**. Bootstrap thủ công bằng SQL ([phase7_ha_bootstrap.sh](scripts/phase7_ha_bootstrap.sh)); failover demo ([phase7_ha_failover.py](scripts/phase7_ha_failover.py)) kill primary → cluster bầu primary mới → router reroute → data còn nguyên → node cũ rejoin.
+- **R/W split (read scale-out)** ([config/proxysql/proxysql-ha.cnf](config/proxysql/proxysql-ha.cnf) + [phase7_ha_rw_demo.py](scripts/phase7_ha_rw_demo.py)): ProxySQL HA-router có thêm query rules — `^SELECT` và `^SHOW` route sang **reader hostgroup (3 = secondaries)**, mọi thứ khác fall-back sang **writer hostgroup (2 = primary)**. `SELECT … FOR UPDATE/FOR SHARE` lock buộc về writer (giữ lock + tránh stale read). Demo dùng `stats_mysql_query_digest` của ProxySQL **làm bằng chứng tự audit** việc route — không chỉ đoán: hiển thị từng digest_text + hostgroup phục vụ. Sống sót qua failover (writer hostgroup tự cập nhật primary mới).
 - **Full integrated path**: [compose.full.yaml](compose.full.yaml) + [phase7_full_up.sh](scripts/phase7_full_up.sh) ghép tất cả: `Client → ProxySQL (DBF) → Acra (encrypt) → ha-router (GR) → MySQL Cluster`. [phase7_full_verify.py](scripts/phase7_full_verify.py) chứng minh 4 lớp cùng hoạt động.
 - **Regression** ([phase7_regression.sh](scripts/phase7_regression.sh)): revert về default mode rồi chạy lại check Phase 1-6, đảm bảo các phase trước không vỡ.
+
+Phase 7.5 hiện có:
+
+- **Migration SQL** ([mysql/phase8_classification.sql](mysql/phase8_classification.sql)): widen `users.ssn` / `users.credit_card` lên `VARBINARY(512)` để chứa AcraStruct (~161-169 byte); rebuild view `users_masked` **không có** ssn/cc (vì sau khi encrypt-at-rest thì MySQL chỉ thấy ciphertext, mask trên byte sẽ ra rác); tạo 3 user mới `support`/`fraud`/`self_service` với grants theo tier; định nghĩa stored procedure `get_my_profile(customer_id, self_token)` cho self-service. Idempotent (DROP+CREATE user/proc, ALTER là no-op khi cột đã đúng type).
+- **Acra encryptor config** ([config/acra/encryptor_config.yaml](config/acra/encryptor_config.yaml)): thêm `users` table với `ssn` + `credit_card` được mã hóa dưới `client_id=dbsec_client`. Khi đi qua chained path, Acra tự encrypt trên `INSERT/UPDATE`, tự decrypt trên `SELECT`. App không biết gì.
+- **ProxySQL passthrough** ([config/proxysql/proxysql.cnf](config/proxysql/proxysql.cnf) + [proxysql.chained.cnf](config/proxysql/proxysql.chained.cnf)): thêm `support`/`fraud`/`self_service` vào `mysql_users` để ProxySQL pass-through authentication — username giữ nguyên xuống tới MySQL → MySQL apply RBAC + view masking đúng cho từng user.
+- **Apply script** ([scripts/phase8_apply.sh](scripts/phase8_apply.sh)): orchestrate (1) chạy migration SQL → (2) force-recreate acra-server + proxysql để pick up config mới → (3) reload Phase 4 DBF deny rules → (4) chạy encrypt-in-place trên 1000 row existing data.
+- **Encrypt-in-place** ([scripts/phase8_encrypt_users_pii.py](scripts/phase8_encrypt_users_pii.py)): đọc plaintext ssn/cc qua MySQL direct (root, port 3307) rồi `UPDATE` lại qua chained path (port 6033, PyMySQL, `dbfuser`) để Acra mã hóa trên đường vào. Skip row nào đã encrypted (detect prefix `25 25 25` của AcraStruct), nên re-run an toàn (idempotent: lần 2 báo "encrypted 0, skipped 1000").
+- **Verify** ([scripts/phase8_verify.py](scripts/phase8_verify.py)): chạy 4 scenario trên **cùng 1 chain** (trừ DBA — cảnh đối chứng):
+  - `support` qua port 6033 → `SELECT FROM users_masked` thấy `j***@…` / `***-***-3890` / `265**********...`, `SELECT FROM users` bị deny `(1142)`.
+  - `fraud` qua port 6033 → `SELECT ssn, credit_card FROM users` ra plaintext `792-38-1308` / `3581618495931032` (Acra decrypt cho user có quyền đọc raw).
+  - `self_service` qua port 6033 → chỉ chạy được `CALL get_my_profile(id, token)` với token đúng → đọc **đúng row của mình**, ssn/cc Acra-decrypted; token sai/null → `1644 invalid or missing self-auth token`; thử `SELECT FROM users` thẳng → `1142 denied`.
+  - DBA direct port 3307 (no Acra) → `ssn_len=161` bytes, hex head `252525a1…` → ciphertext only. **DBA giữ DB, không giữ key.**
+- **Self-service demo standalone** ([scripts/phase7_self_service_demo.py](scripts/phase7_self_service_demo.py)): minh họa cụ thể 4 trường hợp self-service (correct token, cross-customer enumeration, missing token, direct table bypass attempt) — chứng minh thiết kế chống **IDOR** (Insecure Direct Object Reference).
+
+> **Threat model bao trùm:** mọi tier đều đi qua **một đường duy nhất** (ProxySQL DBF → Acra → MySQL), không có lỗ hổng "support team bypass firewall" hay "fraud connect thẳng Acra". Firewall vẫn enforce trước Acra cho mọi user. Per-user behavior khác nhau là do MySQL nhận đúng username và áp đúng grant + view/procedure — ProxySQL không terminate auth, chỉ re-auth user xuống MySQL.
+
+> **Self-service threat model:** không trust caller's claim of identity. App giả sử đã authenticate customer (login + step-up auth) rồi tính `self_token = SHA2(customer_id || ':self_service_secret', 256)` server-side với secret lấy từ vault → pass token vào procedure. Procedure check token MATCH với customer_id mới trả row → **IDOR bị chặn ngay tại tầng DB** (caller không thể bump id từ 1 lên 2 vì token cho 1 ≠ token cho 2). Trong project demo, secret hard-coded; production = load từ Vault/KMS.
 
 > **Lưu ý MySQL Router → ProxySQL-GR:** proposal định dùng MySQL Router cho HA endpoint, nhưng auto-failover của Router cần InnoDB Cluster metadata do **MySQL Shell** tạo, mà image MySQL Shell không pull được công khai (Oracle gate auth). Theo nguyên tắc fallback §4.3, dùng **ProxySQL cấu hình Group Replication** thay thế — cùng vai trò (HA endpoint ổn định, tự reroute), dùng image đã có. Group Replication vẫn là MySQL GR 3-node thật.
 
@@ -353,10 +373,13 @@ make chain-down      # về default ProxySQL -> MySQL
 make ha-bootstrap    # tạo 3 node GR + ProxySQL GR-router (~vài phút, cần ~1.5GB RAM)
 make ha-verify       # 3/3 ONLINE, đúng 1 primary, round-trip qua router
 make ha-failover     # kill primary -> bầu primary mới -> router reroute -> data còn
+make ha-rw-demo      # writes -> primary, reads + SHOW -> secondaries (R/W split)
 make ha-down         # gỡ cluster + router (volume HA bị xóa, base stack giữ nguyên)
 ```
 
 HA router endpoint: `127.0.0.1:6450` (R/W, qua dbfuser). Group Replication cần số node lẻ (≥3) để có quorum; cụm 3 node chịu được 1 node chết.
+
+**R/W split** dùng đúng 3 node cho cả scale lẫn availability: 1 writer + 2 reader. Demo `make ha-rw-demo` đọc thẳng `stats_mysql_query_digest` của ProxySQL — đó là **audit log nội bộ của routing decisions**, không phải đoán mò: in từng digest_text + hostgroup nó được route tới. Sống sót qua failover (writer hostgroup tự cập nhật primary mới).
 
 ### Full integrated path
 
@@ -370,6 +393,21 @@ make full-verify     # chứng minh cả 4 lớp cùng hoạt động trên 1 ch
 ```bash
 make regression      # revert default mode + chạy lại toàn bộ check Phase 1-6
 ```
+
+## Chạy Phase 7.5 - Data Classification (3-tier)
+
+Phase 7.5 chồng lên chained path của Phase 7. Cần `make acra-keys` trước. Sau đó:
+
+```bash
+make classify-apply       # migrate schema, recreate Acra+ProxySQL với config mới,
+                          # nạp DBF rules, encrypt 1000 row existing trong place
+make classify-verify      # support=masked, fraud=decrypted, self-service=own-row, DBA=ciphertext
+make self-service-demo    # 4 trường hợp riêng cho self-service (IDOR resistance)
+```
+
+Cả 4 role đều đi qua **cùng 1 chain** `ProxySQL → Acra → MySQL` (cổng `6033`); ProxySQL pass-through username nên MySQL apply đúng grant/view/procedure cho từng người. DBA chỉ là cảnh đối chứng — kết nối thẳng MySQL `3307`, không có Acra trong đường, nên thấy ciphertext at rest → chứng minh **separation of duties** (DBA giữ DB, không giữ key).
+
+`make classify-apply` idempotent: gọi lại sẽ skip row đã encrypted (detect prefix `25 25 25` của AcraStruct).
 
 ## Endpoint Local
 

@@ -15,11 +15,16 @@ divider() { echo -e "\n========== $1 =========="; }
 run_root() { docker exec "$CONTAINER" mysql -uroot -p"$ROOT_PASS" -N -e "$1" "$DB" 2>/dev/null; }
 run_app()  { docker exec "$CONTAINER" mysql -u"$APP_USER" -p"$APP_PASS" -N -e "$1" "$DB" 2>/dev/null; }
 
-divider "1. Root reads raw users table (first 5 rows)"
-run_root "SELECT id, email, phone, credit_card, ssn FROM users LIMIT 5;"
+# NOTE: ssn / credit_card moved to the Phase 7.5 Tier 1 (encrypt-at-rest @ Acra) and
+# are no longer projected by users_masked. Tier 1 access is exercised by
+# scripts/phase8_verify.py (support denied, fraud sees decrypted, DBA sees ciphertext).
+# This test focuses on Phase 2's Tier 2 columns (email, phone, address).
 
-divider "2. Appuser reads masked view (first 5 rows)"
-run_app "SELECT id, email, phone, credit_card, ssn FROM users_masked LIMIT 5;"
+divider "1. Root reads raw users table (first 5 rows) - Tier 2 columns"
+run_root "SELECT id, email, phone, address FROM users LIMIT 5;"
+
+divider "2. Appuser reads masked view (first 5 rows) - Tier 2 columns"
+run_app "SELECT id, email, phone, address FROM users_masked LIMIT 5;"
 
 divider "3. Appuser tries to read raw users table (should FAIL)"
 if run_app "SELECT id, email FROM users LIMIT 1;" 2>&1; then

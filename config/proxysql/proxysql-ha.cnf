@@ -1,11 +1,21 @@
 #######################################################################################
-# Phase 7 - ProxySQL as a Group-Replication-aware HA router.
+# Phase 7 - ProxySQL as a Group-Replication-aware HA router with R/W SPLIT.
 #
 # Stands in for MySQL Router (see compose.ha.yaml note). ProxySQL monitors the three
 # GR nodes and keeps exactly one (the primary, read_only=OFF) in the writer hostgroup;
 # secondaries go to the reader hostgroup. On failover it detects the newly elected
 # primary and moves it into the writer hostgroup automatically, so clients connected
 # to port 6033 keep working without knowing which node is primary.
+#
+# R/W split layer (added 2026-05-31):
+#   * Default hostgroup for a connection is the WRITER (2). So an unrouted query
+#     defaults safely to the primary.
+#   * Query rules below detect read-only statements (^SELECT, ^SHOW) and re-route
+#     them to the READER hostgroup (3), spreading reads across the GR secondaries.
+#   * Writes (INSERT/UPDATE/DELETE/DDL) hit no rule -> stay on writer (primary).
+#   * `writer_is_also_reader=0` keeps the primary OUT of reads so we actually see
+#     the split (good for the demo). For prod, flip to 1 to use the primary's
+#     spare read capacity.
 #
 # Hostgroups:
 #   2 = writer (current primary)      3 = reader (secondaries)
@@ -62,10 +72,34 @@ mysql_group_replication_hostgroups=
     }
 )
 
-# Client user. default_hostgroup=2 -> all traffic goes to the current primary, which is
-# all we need for a single-primary failover demo (no read/write split).
+# Client user. default_hostgroup=2 -> traffic defaults to the writer (primary). Reads
+# get re-routed to hostgroup 3 by the mysql_query_rules below; writes have no matching
+# rule so they stay on hostgroup 2. transaction_persistent=1 keeps an in-flight
+# transaction pinned to one hostgroup until it commits (no half-transaction routed
+# across primary+secondary).
 mysql_users=
 (
     { username="dbfuser", password="dbfpass", default_hostgroup=2, active=1,
       transaction_persistent=1 }
+)
+
+# R/W split rules. ProxySQL evaluates rules in `rule_id` order; the FIRST match wins
+# unless apply=0. We use apply=1 to short-circuit on the first hit.
+#
+#   1010 - "SELECT ... FOR UPDATE" / "FOR SHARE" must stay on the writer (it locks
+#          rows; routing it to a secondary loses the lock + sees stale data).
+#   1020 - plain SELECT -> reader hostgroup.
+#   1030 - SHOW (status / variables / processlist / ...) -> reader (read-only).
+#
+# Anything else (INSERT/UPDATE/DELETE/REPLACE/CALL/SET/DDL/USE/BEGIN/COMMIT/...) hits
+# no rule -> falls back to the user's default_hostgroup=2 (writer). That is the safe
+# default: when in doubt, send to the primary.
+mysql_query_rules=
+(
+    { rule_id=1010, active=1, match_pattern="^SELECT.*FOR (UPDATE|SHARE)",
+      destination_hostgroup=2, apply=1 },
+    { rule_id=1020, active=1, match_pattern="^SELECT",
+      destination_hostgroup=3, apply=1 },
+    { rule_id=1030, active=1, match_pattern="^SHOW",
+      destination_hostgroup=3, apply=1 }
 )

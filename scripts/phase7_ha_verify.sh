@@ -48,10 +48,13 @@ RT=$(docker exec dbsec-mysql-1 mysql --ssl-mode=DISABLED -h dbsec-ha-router -P 6
 if [ "$RT" = "verify-rt" ]; then ok "write+read through router succeeded -> $RT"; else fail "round-trip failed (got '$RT')"; fi
 
 echo
-echo "== 4. Which node currently serves the router =="
-SRV=$(docker exec dbsec-mysql-1 mysql --ssl-mode=DISABLED -h dbsec-ha-router -P 6033 \
-  -udbfuser -pdbfpass -N 2>/dev/null -e "SELECT @@report_host;")
-ok "router currently routes to PRIMARY = ${SRV:-unknown}"
+echo "== 4. Which node currently serves writes (hostgroup 2 = writer) =="
+# Ask the admin directly: with R/W split active, SELECT @@hostname would land on a
+# reader and would mislabel the result. runtime_mysql_servers is the source of truth.
+SRV=$(docker exec dbsec-mysql-1 mysql --ssl-mode=DISABLED -h dbsec-ha-router -P 6032 \
+  -uradmin -pradmin -N 2>/dev/null \
+  -e "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id=2 AND status='ONLINE' LIMIT 1;")
+ok "router currently routes writes to PRIMARY = ${SRV:-unknown}"
 
 echo
 echo "HA verification done. Trigger a failover with:"
