@@ -1,0 +1,121 @@
+/* Database Security demo - extras on top of Bootstrap 5. */
+
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+/* ── Architecture banner ─────────────────────────────────────────────────────── */
+.arch-banner .arrow {
+  font-size: 1.6rem;
+  color: #adb5bd;
+  font-weight: bold;
+}
+.layer-pill {
+  display: inline-block;
+  padding: 0.55rem 0.9rem;
+  border-radius: 0.5rem;
+  border: 2px solid #dee2e6;
+  background: #f8f9fa;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.1;
+  min-width: 110px;
+  transition: all 0.25s ease;
+}
+.layer-pill small { display: block; font-weight: 400; color: #6c757d; font-size: 0.72rem; }
+.layer-pill.active-pass {
+  border-color: #198754; background: #d1e7dd; color: #0a3622;
+  box-shadow: 0 0 0 3px rgba(25,135,84,.18);
+}
+.layer-pill.active-blocked {
+  border-color: #dc3545; background: #f8d7da; color: #58151c;
+  box-shadow: 0 0 0 3px rgba(220,53,69,.22);
+}
+.layer-pill.active-skip {
+  border-color: #6c757d; background: #e9ecef; color: #495057;
+  opacity: 0.6;
+}
+
+/* ── Role / Attack buttons ──────────────────────────────────────────────────── */
+.role-btn, .attack-btn {
+  border-width: 2px;
+  transition: all 0.15s ease;
+}
+.role-btn.active {
+  border-width: 3px;
+  background: rgba(13,110,253,0.10);
+  transform: translateY(-1px);
+}
+.attack-btn:hover { background: #f8d7da; }
+.attack-btn.disabled-look {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Query + evidence boxes ─────────────────────────────────────────────────── */
+.query-box, .evidence-box {
+  background: #1e1e2e;
+  color: #f1f1f1;
+  border-radius: 0.4rem;
+  padding: 0.8rem 1rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 0;
+}
+.evidence-box { background: #1a2027; }
+
+/* ── Layer badges (under each result panel) ─────────────────────────────────── */
+.layer-card {
+  flex: 1 1 200px;
+  border: 1px solid #dee2e6;
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  background: #fff;
+  min-width: 200px;
+}
+
+/* ── Result table cells ────────────────────────────────────────────────────── */
+.result-table { background: #fff; }
+.field-name { width: 30%; color: #6c757d; font-weight: 600; }
+.field-plain  { color: #212529; }
+.field-masked {
+  color: #b58105; background: #fff7e1; padding: 0.1rem 0.4rem; border-radius: 0.25rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.field-denied {
+  color: #842029; background: #f8d7da; padding: 0.1rem 0.4rem; border-radius: 0.25rem;
+  font-weight: 600;
+}
+.field-cipher {
+  color: #084298; background: #cfe2ff; padding: 0.1rem 0.4rem; border-radius: 0.25rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ── Verdict + why explain boxes ───────────────────────────────────────────── */
+.verdict-box {
+  margin-top: 1rem;
+  padding: 0.7rem 1rem;
+  border-radius: 0.4rem;
+  background: #d1e7dd;
+  color: #0f5132;
+  font-weight: 600;
+  border-left: 4px solid #198754;
+}
+.verdict-box.verdict-fail {
+  background: #f8d7da; color: #842029; border-left-color: #dc3545;
+}
+.verdict-box.verdict-warn {
+  background: #fff3cd; color: #664d03; border-left-color: #ffc107;
+}
+.verdict-box.verdict-ok { /* default; explicit class for clarity */ }
+.why-box {
+  background: #fdfdfe;
+  border: 1px dashed #adb5bd;
+  border-radius: 0.4rem;
+  padding: 0.7rem 1rem;
+  color: #495057;
+  font-size: 0.92rem;
+}

@@ -8,6 +8,7 @@
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
        classify-apply classify-verify self-service-demo ha-rw-demo \
+       demo-up \
        clean clean-volumes \
        venv pip-install
 
@@ -204,6 +205,11 @@ classify-verify: ## Phase 7.5: verify support=masked, fraud=decrypted, DBA=ciphe
 
 self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure gate
 	python3 scripts/phase7_self_service_demo.py
+
+# ---------- web demo UI ----------
+
+demo-up: ## Launch the web demo UI (Flask) at http://127.0.0.1:5000
+	python3 demo/app.py
 
 # ---------- cleanup ----------
 

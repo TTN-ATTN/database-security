@@ -394,6 +394,25 @@ make full-verify     # chứng minh cả 4 lớp cùng hoạt động trên 1 ch
 make regression      # revert default mode + chạy lại toàn bộ check Phase 1-6
 ```
 
+## Web demo UI (Phase 7 — "Same data, 4 eyes")
+
+Một trang Flask đơn giản, click là thấy ngay — không cần đọc terminal output. Dùng để demo với người chấm/khán giả.
+
+Yêu cầu: stack chained đang chạy (`make classify-apply` đã chạy 1 lần). HA cluster (`make ha-bootstrap`) optional — chỉ cần thiết nếu bạn muốn bấm nút **Kill Primary**.
+
+```bash
+pip install -r requirements.txt   # nếu chưa cài Flask
+make demo-up                      # http://127.0.0.1:5000
+```
+
+UI có 3 section:
+
+1. **4 role button** (Customer / Support / Fraud / DBA) → bấm là chạy `SELECT … FROM users WHERE id=1` qua chain với credential của role đó → panel hiện query, các tầng đã đi qua (highlight ProxySQL/Acra/MySQL trên sơ đồ kiến trúc), bảng dữ liệu trả về (masked/denied/cipher/plain dùng màu khác nhau), và 1 đoạn giải thích "vì sao thấy thế".
+2. **4 attack button** (SQL Injection / IDOR Bump / Insider DBA Dump / Kill Primary) → mỗi nút mô phỏng 1 mối đe dọa thật, hiển thị tầng nào chặn, evidence cụ thể từ stack (error code, ciphertext hex, primary mới sau bầu cử…).
+3. **Architecture banner** ở header tự highlight tầng đang được dùng trong mỗi action (xanh = pass, đỏ = blocked, xám = không đi qua).
+
+Convincing hơn `bash scripts/*` vì khán giả tự đọc evidence trong UI, không cần tin lời người demo.
+
 ## Chạy Phase 7.5 - Data Classification (3-tier)
 
 Phase 7.5 chồng lên chained path của Phase 7. Cần `make acra-keys` trước. Sau đó:

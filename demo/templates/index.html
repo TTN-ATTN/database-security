@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Database Security Demo</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="bg-light">
+
+<div class="container py-4" style="max-width: 1100px;">
+
+  <!-- HEADER -->
+  <header class="mb-4">
+    <h1 class="h3 mb-1">🔒 Database Security Demo</h1>
+    <p class="text-muted mb-3">
+      Cùng một câu query — <code>SELECT … FROM users WHERE id={{ customer_id }}</code>
+      (Customer #{{ customer_id }}, Danielle Johnson) — đi qua kiến trúc bên dưới,
+      bốn role nhìn thấy <strong>bốn kết quả khác nhau</strong>.
+    </p>
+    <div class="arch-banner p-3 bg-white rounded shadow-sm">
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <span class="layer-pill layer-client">Client</span>
+        <span class="arrow">→</span>
+        <span class="layer-pill layer-proxy" id="arch-proxy">ProxySQL DBF<br><small>port 6033</small></span>
+        <span class="arrow">→</span>
+        <span class="layer-pill layer-acra" id="arch-acra">Acra<br><small>encrypt/decrypt</small></span>
+        <span class="arrow">→</span>
+        <span class="layer-pill layer-mysql" id="arch-mysql">MySQL<br><small>RBAC + view + proc</small></span>
+        <span class="text-muted mx-2">|</span>
+        <span class="layer-pill layer-dba" id="arch-dba">DBA direct<br><small>port 3307</small></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ROLE PICKER -->
+  <section class="card mb-4">
+    <div class="card-body">
+      <h2 class="h5 mb-3">1. Tôi đăng nhập với vai trò</h2>
+      <div class="row g-3">
+        <div class="col-md-3">
+          <button class="role-btn btn btn-outline-primary w-100 py-3" data-role="customer">
+            <div class="fs-3">👤</div>
+            <div class="fw-bold">Customer</div>
+            <small>(chính mình)</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="role-btn btn btn-outline-warning w-100 py-3" data-role="support">
+            <div class="fs-3">🎧</div>
+            <div class="fw-bold">Support staff</div>
+            <small>(Tier 2 only)</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="role-btn btn btn-outline-danger w-100 py-3" data-role="fraud">
+            <div class="fs-3">🕵️</div>
+            <div class="fw-bold">Fraud team</div>
+            <small>(need-to-know)</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="role-btn btn btn-outline-dark w-100 py-3" data-role="dba">
+            <div class="fs-3">🛠️</div>
+            <div class="fw-bold">DBA</div>
+            <small>(direct MySQL)</small>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROLE RESULT PANEL -->
+  <section id="role-panel" class="card mb-4 d-none">
+    <div class="card-body">
+      <h2 class="h5 mb-2">2. Kết quả</h2>
+      <div id="role-loading" class="text-muted d-none">Đang query…</div>
+      <div id="role-content" class="d-none">
+        <div class="mb-2">
+          <span class="badge bg-secondary" id="role-endpoint"></span>
+        </div>
+        <p class="text-muted mb-1">Query gửi đi:</p>
+        <pre class="query-box" id="role-query"></pre>
+
+        <p class="text-muted mb-1 mt-3">Đi qua các tầng:</p>
+        <div id="role-layers" class="d-flex flex-wrap gap-2 mb-3"></div>
+
+        <p class="text-muted mb-1 mt-3">Dữ liệu trả về:</p>
+        <table class="table table-sm result-table">
+          <tbody id="role-result"></tbody>
+        </table>
+
+        <div class="verdict-box" id="role-verdict"></div>
+        <div class="why-box mt-3" id="role-why"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ATTACK PANEL -->
+  <section class="card mb-4 border-danger">
+    <div class="card-body">
+      <h2 class="h5 mb-3">3. ⚔️ Thử tấn công — mỗi nút là một mối đe dọa thật</h2>
+      <div class="row g-3">
+        <div class="col-md-3">
+          <button class="attack-btn btn btn-outline-danger w-100 py-3" data-attack="sqli">
+            <div class="fs-4">💉</div>
+            <div class="fw-bold">SQL Injection</div>
+            <small>OWASP A03</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="attack-btn btn btn-outline-danger w-100 py-3" data-attack="idor">
+            <div class="fs-4">🔢</div>
+            <div class="fw-bold">IDOR Bump</div>
+            <small>OWASP API1</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="attack-btn btn btn-outline-danger w-100 py-3" data-attack="dba_dump">
+            <div class="fs-4">📦</div>
+            <div class="fw-bold">Insider DBA Dump</div>
+            <small>data exfiltration</small>
+          </button>
+        </div>
+        <div class="col-md-3">
+          <button class="attack-btn btn btn-outline-danger w-100 py-3" data-attack="kill_primary"
+                  id="kill-btn">
+            <div class="fs-4">💥</div>
+            <div class="fw-bold">Kill Primary</div>
+            <small>infra failure</small>
+          </button>
+        </div>
+      </div>
+
+      <div id="attack-panel" class="mt-4 d-none">
+        <div id="attack-loading" class="text-muted d-none">Đang thử tấn công…</div>
+        <div id="attack-content" class="d-none">
+          <h3 class="h6 mb-2" id="attack-name"></h3>
+          <p class="mb-2"><strong>Ý đồ:</strong> <span id="attack-intent"></span></p>
+          <p class="text-muted mb-1">Payload:</p>
+          <pre class="query-box" id="attack-payload"></pre>
+
+          <p class="text-muted mb-1 mt-3">Phòng thủ ở từng tầng:</p>
+          <div id="attack-layers" class="d-flex flex-wrap gap-2 mb-3"></div>
+
+          <p class="text-muted mb-1 mt-3">Evidence (bằng chứng từ stack):</p>
+          <pre class="evidence-box" id="attack-evidence"></pre>
+
+          <div class="verdict-box" id="attack-verdict"></div>
+          <div class="why-box mt-3" id="attack-why"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="text-center text-muted small py-3">
+    Phase 7 — chained data path + 4-role classification + HA cluster.
+    <a href="https://github.com/TTN-ATTN/database-security" target="_blank">Source</a>
+  </footer>
+</div>
+
+<script>
+// ── tiny vanilla-JS controller ────────────────────────────────────────────────
+
+const LAYER_BADGE = {
+  pass:          { cls: "bg-success",   text: "✓ PASS" },
+  decrypt:       { cls: "bg-info",      text: "🔓 DECRYPT" },
+  encrypt:       { cls: "bg-info",      text: "🔐 ENCRYPT" },
+  proc:          { cls: "bg-primary",   text: "📜 PROCEDURE" },
+  rbac:          { cls: "bg-warning text-dark", text: "🛡 RBAC" },
+  root:          { cls: "bg-dark",      text: "🔑 ROOT" },
+  skip:          { cls: "bg-secondary", text: "—  SKIP" },
+  blocked:       { cls: "bg-danger",    text: "✋ BLOCKED" },
+  never_reached: { cls: "bg-secondary", text: "⊘ NEVER REACHED" },
+  elected:       { cls: "bg-success",   text: "🗳 ELECTED" },
+  rerouted:      { cls: "bg-success",   text: "↪ REROUTED" },
+  down:          { cls: "bg-secondary", text: "⊘ DOWN" },
+};
+
+function renderLayers(targetId, layers) {
+  const el = document.getElementById(targetId);
+  el.innerHTML = "";
+  for (const layer of layers) {
+    const badge = LAYER_BADGE[layer.status] || { cls: "bg-secondary", text: layer.status };
+    const div = document.createElement("div");
+    div.className = "layer-card";
+    div.innerHTML = `
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge ${badge.cls}">${badge.text}</span>
+        <strong>${layer.name}</strong>
+      </div>
+      <div class="text-muted small mt-1">${layer.note || ""}</div>
+    `;
+    el.appendChild(div);
+  }
+}
+
+function highlightArch(layers) {
+  // map layer name → arch pill id
+  const arch = { "ProxySQL DBF": "arch-proxy", "Acra": "arch-acra", "MySQL": "arch-mysql" };
+  // reset
+  ["arch-proxy", "arch-acra", "arch-mysql", "arch-dba"].forEach(id =>
+    document.getElementById(id).classList.remove("active-pass", "active-blocked", "active-skip"));
+  for (const layer of layers || []) {
+    const id = arch[layer.name];
+    if (!id) continue;
+    const cls = layer.status === "blocked" ? "active-blocked"
+            : layer.status === "skip" || layer.status === "never_reached" ? "active-skip"
+            : "active-pass";
+    document.getElementById(id).classList.add(cls);
+  }
+}
+
+async function loadRole(role) {
+  const panel = document.getElementById("role-panel");
+  const loading = document.getElementById("role-loading");
+  const content = document.getElementById("role-content");
+  panel.classList.remove("d-none");
+  loading.classList.remove("d-none");
+  content.classList.add("d-none");
+
+  let data;
+  try {
+    const r = await fetch(`/api/role/${role}`);
+    data = await r.json();
+  } catch (e) {
+    loading.textContent = "Lỗi: " + e;
+    return;
+  }
+  loading.classList.add("d-none");
+  content.classList.remove("d-none");
+
+  document.getElementById("role-endpoint").textContent = data.endpoint;
+  document.getElementById("role-query").textContent = data.query;
+  renderLayers("role-layers", data.layers);
+  highlightArch(data.layers);
+  // DBA path: also highlight arch-dba
+  if (role === "dba") document.getElementById("arch-dba").classList.add("active-pass");
+
+  const tbody = document.getElementById("role-result");
+  tbody.innerHTML = "";
+  for (const field of data.fields) {
+    const value = data.result ? data.result[field] : "(no row)";
+    const tr = document.createElement("tr");
+    const isDenied = typeof value === "string" && value.includes("DENIED");
+    const isCipher = typeof value === "string" && value.startsWith("<ciphertext");
+    const isMasked = typeof value === "string" && (value.includes("***") || value.includes("…"));
+    tr.innerHTML = `
+      <td class="field-name">${field}</td>
+      <td class="${isDenied ? "field-denied" : isCipher ? "field-cipher" : isMasked ? "field-masked" : "field-plain"}">
+        ${value ?? "(null)"}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById("role-verdict").textContent = data.verdict;
+  document.getElementById("role-why").innerHTML = "<strong>Tại sao?</strong> " + data.why;
+}
+
+async function runAttack(attack) {
+  const panel = document.getElementById("attack-panel");
+  const loading = document.getElementById("attack-loading");
+  const content = document.getElementById("attack-content");
+  panel.classList.remove("d-none");
+  loading.classList.remove("d-none");
+  content.classList.add("d-none");
+
+  let data;
+  try {
+    const r = await fetch(`/api/attack/${attack}`);
+    data = await r.json();
+  } catch (e) {
+    loading.textContent = "Lỗi: " + e;
+    return;
+  }
+  loading.classList.add("d-none");
+  content.classList.remove("d-none");
+
+  document.getElementById("attack-name").textContent = data.attack;
+  document.getElementById("attack-intent").textContent = data.intent;
+  document.getElementById("attack-payload").textContent = data.payload;
+  renderLayers("attack-layers", data.layer_status);
+  highlightArch(data.layer_status);
+  document.getElementById("attack-evidence").textContent = data.evidence;
+
+  const verdict = document.getElementById("attack-verdict");
+  verdict.textContent = data.verdict;
+  verdict.className = "verdict-box " +
+    (data.verdict.startsWith("✅") ? "verdict-ok"
+     : data.verdict.startsWith("⚠️") ? "verdict-warn"
+     : "verdict-fail");
+
+  document.getElementById("attack-why").innerHTML = "<strong>Tại sao?</strong> " + data.why;
+}
+
+document.querySelectorAll(".role-btn").forEach(b =>
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".role-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    loadRole(b.dataset.role);
+  }));
+
+document.querySelectorAll(".attack-btn").forEach(b =>
+  b.addEventListener("click", () => runAttack(b.dataset.attack)));
+
+// Disable Kill Primary button if HA not running.
+fetch("/api/ha_status").then(r => r.json()).then(j => {
+  if (!j.ha_up) {
+    const btn = document.getElementById("kill-btn");
+    btn.classList.add("disabled-look");
+    btn.querySelector("small").textContent = "HA cluster off";
+  }
+});
+</script>
+</body>
+</html>
