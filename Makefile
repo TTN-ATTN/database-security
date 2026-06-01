@@ -8,7 +8,7 @@
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
        classify-apply classify-verify self-service-demo ha-rw-demo \
-       demo-up \
+       demo-up demo-clean demo-clean-all \
        clean clean-volumes \
        venv pip-install
 
@@ -210,6 +210,12 @@ self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure g
 
 demo-up: ## Launch the web demo UI (Flask) at http://127.0.0.1:5000
 	python3 demo/app.py
+
+demo-clean: ## Safe cleanup: kill Flask + remove __pycache__ + truncate demo DB rows
+	bash scripts/cleanup_demo_artifacts.sh --demo-data
+
+demo-clean-all: ## Full cleanup: above + truncate logs + tear down HA cluster (~1.5GB freed)
+	bash scripts/cleanup_demo_artifacts.sh --all
 
 # ---------- cleanup ----------
 
