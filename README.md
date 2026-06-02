@@ -394,24 +394,53 @@ make full-verify     # chứng minh cả 4 lớp cùng hoạt động trên 1 ch
 make regression      # revert default mode + chạy lại toàn bộ check Phase 1-6
 ```
 
-## Web demo UI (Phase 7 — "Same data, 4 eyes")
+## Web demo UI — Login flow theo role
 
-Một trang Flask đơn giản, click là thấy ngay — không cần đọc terminal output. Dùng để demo với người chấm/khán giả.
+Multi-page Flask app mô phỏng web thật: 4 user account, mỗi role có UI riêng + đầy đủ tính năng phòng thủ được thể hiện trong context "real app".
 
-Yêu cầu: stack chained đang chạy (`make classify-apply` đã chạy 1 lần). HA cluster (`make ha-bootstrap`) optional — chỉ cần thiết nếu bạn muốn bấm nút **Kill Primary**.
+### Setup 1 lệnh
 
 ```bash
-pip install -r requirements.txt   # nếu chưa cài Flask
+pip install -r requirements.txt   # lần đầu
+make phase7_part2                 # ⭐ acra-keys + base + chained + classify + HA bootstrap
 make demo-up                      # http://127.0.0.1:5000
 ```
 
-UI có 3 section:
+`make phase7_part2` idempotent — re-run sẽ skip bước đã xong, chỉ làm bước còn thiếu.
 
-1. **4 role button** (Customer / Support / Fraud / DBA) → bấm là chạy `SELECT … FROM users WHERE id=1` qua chain với credential của role đó → panel hiện query, các tầng đã đi qua (highlight ProxySQL/Acra/MySQL trên sơ đồ kiến trúc), bảng dữ liệu trả về (masked/denied/cipher/plain dùng màu khác nhau), và 1 đoạn giải thích "vì sao thấy thế".
-2. **4 attack button** (SQL Injection / IDOR Bump / Insider DBA Dump / Kill Primary) → mỗi nút mô phỏng 1 mối đe dọa thật, hiển thị tầng nào chặn, evidence cụ thể từ stack (error code, ciphertext hex, primary mới sau bầu cử…).
-3. **Architecture banner** ở header tự highlight tầng đang được dùng trong mỗi action (xanh = pass, đỏ = blocked, xám = không đi qua).
+### 4 user (click vào card để login)
 
-Convincing hơn `bash scripts/*` vì khán giả tự đọc evidence trong UI, không cần tin lời người demo.
+| User | Role | Demo |
+|---|---|---|
+| **Alice** (`alice`) | Customer #1 | Trang `/profile` đọc data của mình; thử URL `?id=2` (IDOR) → DB từ chối |
+| **Bob** (`bob`) | Customer #2 | Như Alice; cả 2 customer chia sẻ cùng pattern |
+| **Carol** (`carol`) | Support | List khách (masked); search box (thử SQLi → ProxySQL chặn); detail page có "try raw" → 1142 denied |
+| **Dave** (`dave`) | Admin/DBA | 4-panel dashboard: (A) raw ciphertext, (B) HA cluster + 💥 kill button mỗi node, (C) Phase 5 stress, (D) Phase 6 discovery |
+
+Plus: **right sidebar — live MySQL log tail** (SSE) chạy liên tục → mỗi click sinh ra dòng log mới → chứng minh "real-time, không phải web tĩnh".
+
+### Tính năng demo mapping
+
+| Tính năng đồ án | Demo ở đâu trong UI |
+|---|---|
+| ProxySQL DBF (Phase 4) | Search "OR '1'='1" trang Carol → DBF block (1148) |
+| Acra encryption (Phase 4/7.5) | Alice profile thấy plaintext; Dave panel A thấy ciphertext |
+| RBAC + view masking (Phase 2/7.5) | Carol detail page: masked view + raw access denied (1142) |
+| Stored proc IDOR defense (Phase 7.5 self-service) | Alice `?id=2` → SIGNAL 45000 |
+| Phase 3 audit pipeline | Right sidebar live log = query attribution per-user real-time |
+| Phase 5 perf monitor + alerts | Dave panel C: 3 stress button → mở Grafana xem dashboard + alerts |
+| Phase 6 discovery | Dave panel D: scan → table findings (PII rò rỉ trong activity_logs.notes) |
+| Phase 7 HA + failover | Dave panel B: 💥 kill node → cluster bầu primary mới, panel auto-update |
+
+### Cleanup sau demo
+
+Xem chi tiết: [demo/CLEANUP.md](demo/CLEANUP.md)
+
+Tóm tắt:
+```bash
+# Ctrl+C terminal Flask, rồi:
+make demo-clean-all   # free ~1.5GB RAM (tear down HA), giữ base + keystore
+```
 
 ## Chạy Phase 7.5 - Data Classification (3-tier)
 

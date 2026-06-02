@@ -8,7 +8,7 @@
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
        classify-apply classify-verify self-service-demo ha-rw-demo \
-       demo-up demo-clean demo-clean-all \
+       demo-up demo-clean demo-clean-all phase7_part2 \
        clean clean-volumes \
        venv pip-install
 
@@ -216,6 +216,58 @@ demo-clean: ## Safe cleanup: kill Flask + remove __pycache__ + truncate demo DB 
 
 demo-clean-all: ## Full cleanup: above + truncate logs + tear down HA cluster (~1.5GB freed)
 	bash scripts/cleanup_demo_artifacts.sh --all
+
+# ---------- phase 7 part 2: ONE-SHOT DEMO SETUP ----------
+# Idempotent: safe to re-run. Skips work that's already done.
+# After this completes, run `make demo-up` to start the Flask UI.
+
+phase7_part2: env ## ⭐ Setup Phase 7 demo end-to-end (acra keys + chained + HA cluster)
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo "  Phase 7 part 2 — full demo setup (base + chained + HA + classify)"
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "── 1/5 ensure Acra master key ──"
+	@if grep -q '^ACRA_MASTER_KEY=' .env 2>/dev/null; then \
+	  echo "  ACRA_MASTER_KEY already in .env (skip generation)"; \
+	else \
+	  $(MAKE) -s acra-keys; \
+	fi
+	@echo ""
+	@echo "── 2/5 base stack up (~30s) ──"
+	$(COMPOSE) up -d
+	@echo "  waiting for MySQL healthy …"
+	@for i in $$(seq 1 60); do \
+	  st=$$(docker inspect -f '{{.State.Health.Status}}' dbsec-mysql 2>/dev/null || echo missing); \
+	  [ "$$st" = "healthy" ] && { echo "  MySQL healthy"; break; }; \
+	  printf "."; sleep 2; \
+	  [ "$$i" = "60" ] && { echo " TIMEOUT"; exit 1; }; \
+	done
+	@echo ""
+	@echo "── 3/5 chained mode + classification (~1-2min) ──"
+	@bash scripts/phase7_5_apply.sh
+	@echo ""
+	@echo "── 4/5 HA cluster bootstrap (~2-3min, ~1.5GB RAM) ──"
+	@if docker ps --format '{{.Names}}' | grep -qE '^(dbsec-mysql-[123]|dbsec-ha-router)$$'; then \
+	  echo "  HA cluster already running (skip bootstrap)"; \
+	else \
+	  bash scripts/phase7_ha_bootstrap.sh; \
+	fi
+	@echo ""
+	@echo "── 5/5 sanity check ──"
+	@python3 scripts/phase7_5_verify.py 2>&1 | tail -4
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo "  ✅ Demo stack ready. Next:"
+	@echo ""
+	@echo "    make demo-up          # launch Flask at http://127.0.0.1:5000"
+	@echo ""
+	@echo "  Login flow on the web UI:"
+	@echo "    Alice/Bob = customer | Carol = support | Dave = admin"
+	@echo ""
+	@echo "  When done, see demo/CLEANUP.md or run:"
+	@echo "    make demo-clean-all   # frees ~1.5GB RAM (tears down HA)"
+	@echo "════════════════════════════════════════════════════════════════════"
 
 # ---------- cleanup ----------
 
