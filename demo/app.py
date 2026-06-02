@@ -1,12 +1,17 @@
 """Database Security demo - single-page web UI.
 
 Endpoints:
-  GET  /                       -> render index.html
-  GET  /api/role/<role>        -> run "view Customer #1 profile" as that role
-                                  (roles: customer, support, fraud, dba)
-  GET  /api/attack/<attack>    -> run an attack scenario, report which layer blocked it
-                                  (attacks: sqli, idor, dba_dump, kill_primary)
-  GET  /api/ha_status          -> JSON {ha_up: bool} so the UI can grey the Kill button
+  GET   /                          -> render index.html
+  GET   /api/role/<role>           -> run "view Customer #1 profile" as that role
+                                      (roles: customer, support, fraud, dba)
+  GET   /api/attack/<attack>       -> run an attack scenario; report which layer blocked
+                                      (attacks: sqli, idor, dba_dump, kill_primary)
+  GET   /api/ha_status             -> JSON {ha_up: bool}
+  GET   /api/alerts                -> proxied Prometheus alerts (firing + pending)
+  GET   /api/stream/mysql-log      -> Server-Sent Events: tail logs/mysql/general.log
+  POST  /api/stress/<kind>         -> trigger Phase 5 stress (slow_query / conn_burst /
+                                      mixed_load) - long-running, returns "started"
+  POST  /api/discovery/scan        -> run Phase 6 PII pattern scan; return JSON findings
 
 Backed by the same chained stack the rest of the project uses; this app is just a
 thin shell that calls into the existing services with different MySQL identities and
@@ -18,11 +23,19 @@ Then open http://127.0.0.1:5000
 """
 
 import hashlib
+import json
 import os
+import re
 import subprocess
+import threading
+import time
 
+import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template
+from flask import (
+    Flask, Response, abort, jsonify, redirect, render_template, request,
+    session, stream_with_context, url_for,
+)
 import mysql.connector
 import pymysql
 
@@ -48,6 +61,54 @@ DBA_DIRECT = dict(host=CHAIN_HOST, port=DIRECT_PORT, user="root",
                   password=ROOTPW, database=DB)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+# Demo secret; fine for a school project, NOT for prod.
+app.secret_key = os.getenv("DEMO_SECRET_KEY", "dbsec-demo-not-a-real-secret")
+
+# ── Fake login accounts. 2 customers + 1 support + 1 admin.
+# Click-to-login: the UI submits username only; password mirrors username for the demo.
+# In production this is replaced by a real IdP / OAuth.
+USERS = {
+    "alice": {"password": "alice", "role": "customer", "customer_id": 1,
+              "display_name": "Alice", "subtitle": "Customer (id=1)"},
+    "bob":   {"password": "bob",   "role": "customer", "customer_id": 2,
+              "display_name": "Bob",   "subtitle": "Customer (id=2)"},
+    "carol": {"password": "carol", "role": "support", "customer_id": None,
+              "display_name": "Carol", "subtitle": "Support staff"},
+    "dave":  {"password": "dave",  "role": "admin",   "customer_id": None,
+              "display_name": "Dave",  "subtitle": "DBA / Admin"},
+}
+
+
+def current_user():
+    """Returns the dict for the logged-in user, or None."""
+    u = session.get("user")
+    if not u:
+        return None
+    return USERS.get(u) | {"username": u} if u in USERS else None
+
+
+def require_role(*roles):
+    """Decorator factory: only allow these roles to hit the route."""
+    from functools import wraps
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = current_user()
+            if not user:
+                return redirect(url_for("login_page"))
+            if user["role"] not in roles:
+                # Logged in but wrong role -> push them to their own home.
+                return redirect(url_for("role_home"))
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+@app.context_processor
+def inject_user():
+    """Make `user` available in every template."""
+    return {"user": current_user()}
 
 
 def self_token(customer_id):
@@ -454,11 +515,506 @@ def ha_status():
     return jsonify({"ha_up": _ha_running()})
 
 
-# ── main page ────────────────────────────────────────────────────────────────────
+# ── Live monitoring proxies + streams ────────────────────────────────────────────
+
+PROM_URL = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
+GRAFANA_URL = os.getenv("GRAFANA_URL", "http://127.0.0.1:3000")
+ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://127.0.0.1:9093")
+GENERAL_LOG_PATH = os.getenv("MYSQL_GENERAL_LOG", "logs/mysql/general.log")
+
+
+@app.get("/api/monitoring_urls")
+def monitoring_urls():
+    """Frontend uses these to build the 'open in new tab' links."""
+    return jsonify({
+        "prometheus": PROM_URL,
+        "grafana": GRAFANA_URL,
+        "alertmanager": ALERTMANAGER_URL,
+    })
+
+
+@app.get("/api/alerts")
+def alerts():
+    """Proxy Prometheus alerts so the browser doesn't hit CORS."""
+    try:
+        r = requests.get(f"{PROM_URL}/api/v1/alerts", timeout=2)
+        data = r.json().get("data", {}).get("alerts", [])
+        firing = [a for a in data if a.get("state") == "firing"]
+        pending = [a for a in data if a.get("state") == "pending"]
+        return jsonify({
+            "firing_count": len(firing),
+            "pending_count": len(pending),
+            "firing": [
+                {"name": a["labels"].get("alertname"),
+                 "instance": a["labels"].get("instance", ""),
+                 "summary": a.get("annotations", {}).get("summary", "")}
+                for a in firing
+            ],
+            "pending": [
+                {"name": a["labels"].get("alertname"),
+                 "instance": a["labels"].get("instance", "")}
+                for a in pending
+            ],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "firing_count": 0, "pending_count": 0,
+                        "firing": [], "pending": []}), 503
+
+
+@app.get("/api/stream/mysql-log")
+def stream_mysql_log():
+    """Server-Sent Events: tail logs/mysql/general.log.
+
+    Sends each new line as an SSE 'data:' frame. Browser EventSource auto-reconnects
+    if Flask restarts. Filters out the very chatty session-init noise (SET names,
+    SELECT version, etc.) so the stream stays focused on real client queries.
+    """
+    log_path = os.path.join(os.path.dirname(__file__), "..", GENERAL_LOG_PATH)
+    log_path = os.path.abspath(log_path)
+
+    # Patterns we want to drop from the stream (session boilerplate + monitor health).
+    skip_re = re.compile(
+        r"(SET (NAMES|SESSION|@|wait_timeout|autocommit)|SELECT @@version|SHOW STATUS|"
+        r"SELECT 1\b|monitor@|administrator command|/\* mysql-connector\b)",
+        re.IGNORECASE,
+    )
+
+    @stream_with_context
+    def generate():
+        # On first connect, send the last ~10 lines so the panel isn't empty.
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()[-30:]
+                for line in lines:
+                    line = line.rstrip()
+                    if line and not skip_re.search(line):
+                        yield f"data: {line}\n\n"
+        except FileNotFoundError:
+            yield "data: (logs/mysql/general.log not found yet — run a query first)\n\n"
+            return
+        # Then tail forever.
+        last_size = os.path.getsize(log_path)
+        idle = 0
+        while True:
+            time.sleep(0.5)
+            try:
+                size = os.path.getsize(log_path)
+            except FileNotFoundError:
+                continue
+            if size < last_size:  # file got truncated / rotated
+                last_size = 0
+            if size > last_size:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last_size)
+                    chunk = f.read()
+                last_size = size
+                for line in chunk.splitlines():
+                    line = line.rstrip()
+                    if line and not skip_re.search(line):
+                        yield f"data: {line}\n\n"
+                idle = 0
+            else:
+                idle += 1
+                if idle % 30 == 0:  # heartbeat every 15s so the connection stays alive
+                    yield ": keepalive\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ── Phase 5 stress triggers ──────────────────────────────────────────────────────
+
+_stress_threads = {}  # kind -> Thread
+
+def _run_stress_thread(kind, fn):
+    """Run fn() in a background daemon thread; reuse the same slot per kind."""
+    existing = _stress_threads.get(kind)
+    if existing and existing.is_alive():
+        return False  # already running
+    t = threading.Thread(target=fn, name=f"stress-{kind}", daemon=True)
+    t.start()
+    _stress_threads[kind] = t
+    return True
+
+
+def _stress_slow_query():
+    """SELECT SLEEP(8) - lands in slow_query log (long_query_time defaults to 2s)."""
+    try:
+        conn = pymysql.connect(**DBFUSER, connect_timeout=5, read_timeout=20)
+        cur = conn.cursor()
+        cur.execute("SELECT SLEEP(8), 'phase5-slow-query-demo' AS tag")
+        cur.fetchall(); cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+def _stress_conn_burst():
+    """Open 50 concurrent connections + hold ~10s -> Threads_connected spike."""
+    conns = []
+    cfg = {**DBFUSER, "connect_timeout": 5}
+    try:
+        for _ in range(50):
+            try:
+                conns.append(pymysql.connect(**cfg))
+            except Exception:
+                pass
+        time.sleep(10)
+    finally:
+        for c in conns:
+            try: c.close()
+            except Exception: pass
+
+
+def _stress_mixed_load():
+    """Mixed SELECT/INSERT/UPDATE workload for ~30s via PyMySQL on the chain."""
+    import random
+    start = time.time()
+    try:
+        conn = pymysql.connect(**DBFUSER); cur = conn.cursor()
+        while time.time() - start < 30:
+            op = random.choice(["select", "select", "select", "insert", "update"])
+            try:
+                if op == "select":
+                    cur.execute("SELECT id, product FROM orders ORDER BY id DESC LIMIT 10")
+                    cur.fetchall()
+                elif op == "insert":
+                    cur.execute(
+                        "INSERT INTO orders (user_id, product, amount, status) "
+                        "VALUES (%s, %s, %s, 'pending')",
+                        (random.randint(1, 100),
+                         f"phase5-load-{random.randint(1000, 9999)}",
+                         round(random.random() * 100, 2)))
+                else:
+                    cur.execute(
+                        "UPDATE orders SET status='shipped' "
+                        "WHERE product LIKE 'phase5-load-%' AND status='pending' "
+                        "ORDER BY id DESC LIMIT 1")
+            except Exception:
+                pass
+        cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+@app.post("/api/stress/<kind>")
+def stress(kind):
+    plans = {
+        "slow_query": (_stress_slow_query, "SELECT SLEEP(8) - sẽ vào slow.log, kích "
+                       "alert MysqlSlowQueryRateHigh nếu lặp đủ tần suất",
+                       "8s"),
+        "conn_burst": (_stress_conn_burst, "Mở 50 connection cùng lúc, giữ 10s - "
+                       "kích Threads_connected spike",
+                       "~10s"),
+        "mixed_load": (_stress_mixed_load, "SELECT/INSERT/UPDATE liên tục 30s qua "
+                       "chained path - tạo QPS đủ để dashboard có dữ liệu",
+                       "30s"),
+    }
+    if kind not in plans:
+        return jsonify({"error": f"unknown stress kind: {kind}"}), 400
+    fn, desc, dur = plans[kind]
+    started = _run_stress_thread(kind, fn)
+    return jsonify({
+        "kind": kind,
+        "started": started,
+        "duration": dur,
+        "description": desc,
+        "watch": "Mở Grafana (link trên header) → dashboard 'Database Security - Phase 5 "
+                 "Performance' và Alertmanager để xem reaction.",
+    })
+
+
+# ── Phase 6 discovery ────────────────────────────────────────────────────────────
+
+@app.post("/api/discovery/scan")
+def discovery_scan():
+    """Run Phase 6 data pattern scanner; return parsed JSON findings.
+
+    The scanner writes findings to logs/discovery/data_findings.json. We invoke it
+    inline (subprocess) so we always read the freshest result.
+    """
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    try:
+        r = subprocess.run(
+            ["python3", "scripts/phase6_scan_data_patterns.py", "--mask-all"],
+            cwd=root, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "discovery scan timed out (>60s)"}), 504
+    # Read findings written to disk.
+    findings_path = os.path.join(root, "logs", "discovery", "data_findings.json")
+    if not os.path.exists(findings_path):
+        return jsonify({"error": "no findings file produced",
+                        "stderr": r.stderr[-400:]}), 500
+    with open(findings_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    # Shape it for the UI: list of {table, column, pattern, severity, verdict, count}.
+    findings = data if isinstance(data, list) else data.get("findings", [])
+    rows = []
+    for f in findings:
+        rows.append({
+            "table": f.get("table"),
+            "column": f.get("column"),
+            "pattern": f.get("pattern_type") or f.get("pattern"),
+            "severity": f.get("severity"),
+            "verdict": f.get("access_verdict") or f.get("verdict"),
+            "exposed_to": f.get("exposed_to"),
+            "exposure_path": f.get("exposure_path"),
+            "count": f.get("match_count") or f.get("count"),
+        })
+    return jsonify({"findings": rows, "total": len(rows)})
+
+
+# ═══════════════════════ login + role-aware pages ═══════════════════════════════
 
 @app.get("/")
 def index():
-    return render_template("index.html", customer_id=DEMO_CUSTOMER_ID)
+    """Logged in -> jump to role home. Otherwise -> login page."""
+    if current_user():
+        return redirect(url_for("role_home"))
+    return render_template("login.html", users=USERS)
+
+
+@app.post("/login")
+def login():
+    username = (request.form.get("username") or "").strip().lower()
+    if username in USERS:
+        session.clear()
+        session["user"] = username
+        return redirect(url_for("role_home"))
+    return redirect(url_for("login_page", error="unknown user"))
+
+
+@app.get("/login")
+def login_page():
+    return render_template("login.html", users=USERS, error=request.args.get("error"))
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
+
+
+@app.get("/home")
+def role_home():
+    """Send user to their role's home page."""
+    u = current_user()
+    if not u:
+        return redirect(url_for("login_page"))
+    if u["role"] == "customer":
+        return redirect(url_for("customer_profile"))
+    if u["role"] == "support":
+        return redirect(url_for("support_list"))
+    if u["role"] == "admin":
+        return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("login_page"))
+
+
+# ── Customer portal ──────────────────────────────────────────────────────────────
+
+@app.get("/profile")
+@require_role("customer")
+def customer_profile():
+    """Customer's profile page. URL ?id=<n> simulates an app route that takes the
+    target customer's id from the URL. Vulnerable apps would SELECT directly by that
+    id (IDOR). Our backend computes the proc token using the SESSION's id, not the
+    URL's, so when they differ the stored procedure refuses (1644).
+    """
+    user = current_user()
+    session_id = user["customer_id"]
+    # Default: visit own profile. Attacker can put any id in the URL.
+    try:
+        requested_id = int(request.args.get("id", session_id))
+    except ValueError:
+        requested_id = session_id
+
+    # Token is bound to SESSION's id; the app passes the URL's id to the proc.
+    token = self_token(session_id)
+    conn = pymysql.connect(**SELF_SERVICE); cur = conn.cursor()
+    row = None
+    blocked = None
+    try:
+        cur.callproc("get_my_profile", (requested_id, token))
+        row = cur.fetchone()
+    except pymysql.MySQLError as err:
+        blocked = str(err).splitlines()[0]
+    finally:
+        cur.close(); conn.close()
+
+    cols = ["id", "first_name", "last_name", "email", "phone", "address",
+            "ssn", "credit_card", "created_at"]
+    profile = None
+    if row:
+        profile = {c: to_text(v) for c, v in zip(cols, row)}
+    return render_template(
+        "customer.html",
+        session_id=session_id, requested_id=requested_id,
+        profile=profile, blocked=blocked,
+        is_idor_attempt=(requested_id != session_id),
+    )
+
+
+# ── Support portal ───────────────────────────────────────────────────────────────
+
+@app.get("/support")
+@require_role("support")
+def support_list():
+    """List customers with masked PII. Plus an optional search box that — to make the
+    DBF demo work — concatenates the user's input into the WHERE clause (vulnerable
+    pattern). If the user types injection like `' OR '1'='1`, ProxySQL DBF catches it.
+    """
+    q = request.args.get("q", "").strip()
+    rows = []
+    blocked_by_dbf = None
+    try:
+        conn = pymysql.connect(**SUPPORT); cur = conn.cursor()
+        if q:
+            # INTENTIONALLY concatenated to give DBF something to detect.
+            # In real prod this would be a bind parameter, but then the regex rule
+            # wouldn't see the injection string and couldn't block it.
+            sql = (
+                "SELECT id, first_name, last_name, email, phone "
+                "FROM users_masked WHERE first_name LIKE '%" + q + "%' "
+                "OR last_name LIKE '%" + q + "%' LIMIT 25"
+            )
+        else:
+            sql = ("SELECT id, first_name, last_name, email, phone "
+                   "FROM users_masked ORDER BY id LIMIT 25")
+        cur.execute(sql)
+        for r in cur.fetchall():
+            rows.append({"id": r[0], "first_name": r[1], "last_name": r[2],
+                         "email": r[3], "phone": r[4]})
+        cur.close(); conn.close()
+    except pymysql.MySQLError as err:
+        msg = str(err)
+        if "1148" in msg or "DBF" in msg:
+            blocked_by_dbf = msg.splitlines()[0]
+        else:
+            blocked_by_dbf = f"(other MySQL error) {msg.splitlines()[0]}"
+    return render_template("support_list.html",
+                           rows=rows, q=q, blocked_by_dbf=blocked_by_dbf)
+
+
+@app.get("/support/customer/<int:cid>")
+@require_role("support")
+def support_customer_detail(cid):
+    """Masked detail for one customer. Plus an explicit 'try raw access' button that
+    SELECTs users (not users_masked) -> MySQL refuses with 1142 -> Tier 1 protection
+    visible."""
+    detail = None
+    try:
+        conn = pymysql.connect(**SUPPORT); cur = conn.cursor()
+        cur.execute(
+            "SELECT id, first_name, last_name, email, phone, address "
+            "FROM users_masked WHERE id=%s", (cid,))
+        r = cur.fetchone()
+        if r:
+            detail = {"id": r[0], "first_name": r[1], "last_name": r[2],
+                      "email": r[3], "phone": r[4], "address": r[5]}
+        cur.close(); conn.close()
+    except pymysql.MySQLError:
+        detail = None
+
+    # Try raw access (this will be denied; we show it as evidence in the UI).
+    raw_denied = None
+    try:
+        conn = pymysql.connect(**SUPPORT); cur = conn.cursor()
+        cur.execute("SELECT ssn, credit_card FROM users WHERE id=%s", (cid,))
+        cur.fetchone(); cur.close(); conn.close()
+    except pymysql.MySQLError as err:
+        raw_denied = str(err).splitlines()[0]
+
+    return render_template("support_detail.html",
+                           cid=cid, detail=detail, raw_denied=raw_denied)
+
+
+# ── Admin dashboard ──────────────────────────────────────────────────────────────
+
+@app.get("/admin")
+@require_role("admin")
+def admin_dashboard():
+    """Admin's multi-panel control center."""
+    # Panel A: raw at-rest sample for customer 1, via DBA direct
+    raw = None
+    try:
+        conn = mysql.connector.connect(**DBA_DIRECT); cur = conn.cursor()
+        cur.execute(
+            "SELECT id, first_name, last_name, "
+            "  LENGTH(ssn), HEX(LEFT(ssn,16)), "
+            "  LENGTH(credit_card), HEX(LEFT(credit_card,16)) "
+            "FROM users WHERE id=1")
+        r = cur.fetchone(); cur.close(); conn.close()
+        if r:
+            raw = {
+                "id": r[0], "first_name": r[1], "last_name": r[2],
+                "ssn_len": r[3], "ssn_hex": r[4],
+                "cc_len": r[5], "cc_hex": r[6],
+            }
+    except Exception:
+        pass
+
+    # Panel B: HA cluster nodes (if up)
+    nodes = []
+    if _ha_running():
+        try:
+            conn = pymysql.connect(
+                host=CHAIN_HOST, port=6452, user="radmin", password="radmin",
+                database="main", ssl_disabled=True, autocommit=True)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers "
+                "ORDER BY hostname")
+            for hg, host, status in cur.fetchall():
+                hg = int(hg)
+                role = "PRIMARY" if hg == 2 else ("SECONDARY" if hg == 3 else f"hg{hg}")
+                nodes.append({"name": host, "role": role, "status": status})
+            cur.close(); conn.close()
+        except Exception:
+            pass
+    # Also include any HA containers that are offline (not in runtime_mysql_servers
+    # in OFFLINE/SHUNNED state).
+    container_names = {"dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"}
+    seen = {n["name"] for n in nodes}
+    if _ha_running():
+        for missing in container_names - seen:
+            nodes.append({"name": missing, "role": "?", "status": "OFFLINE"})
+
+    return render_template("admin.html",
+                           raw=raw, nodes=nodes, ha_up=_ha_running())
+
+
+@app.post("/admin/kill/<node>")
+@require_role("admin")
+def admin_kill_node(node):
+    """Stop a specific GR node + try to rejoin it after failover. Returns JSON."""
+    allowed = {"dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"}
+    if node not in allowed:
+        return jsonify({"error": f"node not in allowlist: {allowed}"}), 400
+    if not _ha_running():
+        return jsonify({"error": "HA cluster not running"}), 503
+    # docker stop = SIGTERM = graceful "leaving group" -> election starts immediately
+    subprocess.run(["docker", "stop", node], capture_output=True, check=False)
+    elected = None
+    primary_before = node  # the one we just killed was a primary or secondary
+    for _ in range(60):
+        time.sleep(0.5)
+        cur = _ha_primary()
+        if cur and cur != primary_before:
+            elected = cur
+            break
+    # Restart + rejoin so the cluster goes back to 3/3 after demo.
+    subprocess.run(["docker", "start", node], capture_output=True, check=False)
+    for _ in range(30):
+        time.sleep(1)
+        ping = subprocess.run(
+            ["docker", "exec", node, "mysqladmin", "-uroot", f"-p{ROOTPW}", "ping"],
+            capture_output=True, check=False)
+        if ping.returncode == 0:
+            break
+    subprocess.run(
+        ["docker", "exec", node, "mysql", "-uroot", f"-p{ROOTPW}",
+         "-e", "START GROUP_REPLICATION;"],
+        capture_output=True, check=False)
+    return jsonify({"killed": node, "elected_primary": elected or "TIMEOUT"})
 
 
 if __name__ == "__main__":

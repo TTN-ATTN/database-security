@@ -1,0 +1,31 @@
+<div class="card sidebar-card sticky-top" style="top: 1rem;">
+  <div class="card-header bg-dark text-white d-flex justify-content-between py-2">
+    <span>🔴 Live MySQL log</span>
+    <span class="small" id="log-status">connecting…</span>
+  </div>
+  <div class="card-body p-0">
+    <pre id="log-tail" class="log-tail mb-0">waiting for queries…</pre>
+  </div>
+  <div class="card-footer small text-muted py-2">
+    Tail <code>logs/mysql/general.log</code> qua SSE. Mỗi action ở UI → query thật hiện ngay.
+  </div>
+</div>
+
+<script>
+(function() {
+  const el = document.getElementById("log-tail");
+  const st = document.getElementById("log-status");
+  if (!el) return;
+  el.textContent = "";
+  const ev = new EventSource("/api/stream/mysql-log");
+  ev.onopen = () => st.textContent = "● live";
+  ev.onerror = () => st.textContent = "⚠ disconnected";
+  ev.onmessage = (e) => {
+    el.textContent += e.data + "\n";
+    el.scrollTop = el.scrollHeight;
+    // cap to last ~200 lines so the DOM doesn't grow forever
+    const lines = el.textContent.split("\n");
+    if (lines.length > 200) el.textContent = lines.slice(-200).join("\n");
+  };
+})();
+</script>

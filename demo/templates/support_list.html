@@ -1,0 +1,75 @@
+{% extends "_layout.html" %}
+{% block title %}Customers — Support{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h4">🎧 Customer search (Support)</h2>
+        <p class="text-muted small mb-3">
+          Bạn chỉ thấy <code>users_masked</code> view (email/phone đã masked).
+          Bị deny <code>SELECT FROM users</code> raw — Tier 1 (ssn/cc) hoàn toàn không reachable.
+        </p>
+
+        <form method="get" class="d-flex gap-2 mb-3">
+          <input type="text" name="q" value="{{ q }}" class="form-control"
+                 placeholder="Tìm theo first_name / last_name (thử SQLi: ' OR '1'='1)">
+          <button type="submit" class="btn btn-warning">Search</button>
+          {% if q %}<a href="{{ url_for('support_list') }}" class="btn btn-outline-secondary">Clear</a>{% endif %}
+        </form>
+
+        {% if blocked_by_dbf %}
+        <div class="alert alert-danger">
+          🛑 <strong>ProxySQL DBF chặn query này:</strong>
+          <code class="d-block bg-light text-dark p-2 rounded mt-2">{{ blocked_by_dbf }}</code>
+          <p class="mb-0 mt-2 small">
+            Bạn vừa nhập một chuỗi match một deny rule (vd <code>OR '1'='1'</code>, hoặc <code>DROP</code>).
+            ProxySQL chặn trước khi query xuống MySQL — application không cần "biết" về SQL injection.
+            Đây là <strong>WAF cho database</strong>.
+          </p>
+        </div>
+        {% endif %}
+
+        {% if rows %}
+        <table class="table table-sm result-table">
+          <thead><tr>
+            <th>ID</th><th>Name</th><th>Email (masked)</th><th>Phone (masked)</th><th></th>
+          </tr></thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td>{{ r.id }}</td>
+              <td>{{ r.first_name }} {{ r.last_name }}</td>
+              <td class="field-masked">{{ r.email }}</td>
+              <td class="field-masked">{{ r.phone }}</td>
+              <td><a href="{{ url_for('support_customer_detail', cid=r.id) }}" class="btn btn-sm btn-outline-primary">View</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% elif not blocked_by_dbf %}
+        <div class="text-muted">Không có kết quả.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card border-info">
+      <div class="card-body small">
+        <strong>💡 Thử các kịch bản:</strong>
+        <ul class="mb-0">
+          <li>Search <code>Smith</code> → kết quả masked bình thường.</li>
+          <li>Search <code>' OR '1'='1</code> → ProxySQL chặn ngay.</li>
+          <li>Search <code>'; DROP TABLE users;--</code> → cũng bị chặn.</li>
+          <li>Click <em>View</em> 1 khách → detail page có nút "try raw access" để demo RBAC.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% include "_live_log.html" %}
+  </div>
+</div>
+{% endblock %}

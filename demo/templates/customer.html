@@ -1,0 +1,85 @@
+{% extends "_layout.html" %}
+{% block title %}My Profile — Customer #{{ session_id }}{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <!-- main -->
+  <div class="col-lg-8">
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h2 class="h4">👤 Hồ sơ khách hàng</h2>
+        <p class="text-muted small mb-2">
+          App đọc id từ URL <code>?id={{ requested_id }}</code> và gọi stored procedure
+          <code>get_my_profile(id, token)</code> với <em>token bound to your session</em>
+          (session.customer_id = <strong>{{ session_id }}</strong>).
+        </p>
+
+        {% if is_idor_attempt %}
+        <div class="alert alert-warning">
+          ⚠️ <strong>IDOR attempt phát hiện</strong>:
+          Bạn (id={{ session_id }}) đang yêu cầu profile của id={{ requested_id }}.
+        </div>
+        {% endif %}
+
+        {% if blocked %}
+        <div class="alert alert-danger">
+          <h5>🛑 Database refused the request</h5>
+          <code class="d-block bg-light text-dark p-2 rounded my-2">{{ blocked }}</code>
+          <p class="mb-1"><strong>Vì sao?</strong>
+          Stored procedure check token mà bạn pass = <code>SHA2('{{ session_id }}:secret', 256)</code>
+          chứ không phải <code>SHA2('{{ requested_id }}:secret', 256)</code>.
+          Token không match id yêu cầu → procedure SIGNAL 45000.</p>
+          <p class="mb-0"><strong>Đây là defense at DB layer</strong>:
+          ngay cả khi app dev quên check ownership (rất phổ biến — OWASP API #1),
+          database vẫn từ chối. <em>Defense in depth working.</em></p>
+        </div>
+        {% elif profile %}
+        <table class="table table-sm result-table">
+          <tbody>
+            {% for k, v in profile.items() %}
+            <tr>
+              <td class="field-name">{{ k }}</td>
+              <td class="field-plain">{{ v }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="alert alert-success">
+          ✅ Profile của bạn — ssn/cc được Acra decrypt trên đường về vì token MATCH id yêu cầu.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Thử IDOR -->
+    <div class="card mb-4 border-danger">
+      <div class="card-body">
+        <h3 class="h5">⚔️ Thử IDOR (Insecure Direct Object Reference)</h3>
+        <p class="text-muted small">
+          Click 1 trong các id dưới → URL đổi <code>?id=</code> → backend gọi proc với
+          <strong>id mới + token cũ (của bạn)</strong> → token mismatch → DB từ chối.
+        </p>
+        <div class="d-flex gap-2 flex-wrap">
+          {% for i in [1, 2, 3, 7, 42, 999] %}
+          <a href="{{ url_for('customer_profile', id=i) }}"
+             class="btn btn-sm btn-outline-{{ 'success' if i == session_id else 'danger' }}">
+            ?id={{ i }} {% if i == session_id %}(của bạn){% endif %}
+          </a>
+          {% endfor %}
+          <a href="{{ url_for('customer_profile') }}" class="btn btn-sm btn-outline-secondary">Reset</a>
+        </div>
+        <p class="small text-muted mt-2 mb-0">
+          Trong production, app phải check <code>session.user_id == requested_id</code> trước khi query.
+          Project mình demo điều xảy ra khi <strong>app dev quên check</strong>.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- live log sidebar -->
+  <div class="col-lg-4">
+    {% include "_live_log.html" %}
+  </div>
+</div>
+{% endblock %}

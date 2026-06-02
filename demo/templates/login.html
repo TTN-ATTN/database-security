@@ -1,0 +1,42 @@
+{% extends "_layout.html" %}
+{% block title %}Đăng nhập — DB Security Demo{% endblock %}
+
+{% block content %}
+<div class="login-wrap mx-auto" style="max-width: 920px;">
+  <div class="text-center mb-4">
+    <h1 class="h2">🔒 Database Security Demo</h1>
+    <p class="text-muted">
+      Bốn user mô phỏng kịch bản thật: 2 khách hàng, 1 support staff, 1 DBA. Click vào card để đăng nhập.
+    </p>
+    {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+  </div>
+
+  <div class="row g-3">
+    {% for username, u in users.items() %}
+    {% set color = {'customer':'primary','support':'warning','admin':'danger'}[u.role] %}
+    {% set icon  = {'customer':'👤','support':'🎧','admin':'🛠'}[u.role] %}
+    <div class="col-md-6 col-lg-3">
+      <form method="post" action="{{ url_for('login') }}" class="m-0">
+        <input type="hidden" name="username" value="{{ username }}">
+        <button type="submit" class="login-card btn btn-outline-{{ color }} w-100 p-3 h-100">
+          <div class="fs-1">{{ icon }}</div>
+          <div class="fw-bold fs-5">{{ u.display_name }}</div>
+          <div class="small text-muted">{{ u.subtitle }}</div>
+          <div class="mt-2"><span class="badge bg-{{ color }}">{{ u.role|upper }}</span></div>
+        </button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="mt-5 small text-muted">
+    <strong>Mỗi role mô phỏng gì:</strong>
+    <ul class="mb-0">
+      <li><strong>Customer (Alice, Bob)</strong>: trang <code>/profile</code> đọc data của mình.
+        Thử <code>?id=&lt;số khác&gt;</code> trên URL → mô phỏng IDOR → stored procedure ở DB refuse vì token mismatch.</li>
+      <li><strong>Support (Carol)</strong>: list khách (masked), search box (thử SQLi → ProxySQL DBF chặn), detail page (có nút "try raw access" → MySQL trả 1142).</li>
+      <li><strong>Admin (Dave)</strong>: dashboard với raw at-rest view (ciphertext), HA infrastructure (3 node + kill button), live MySQL log tail, alert state, stress test + discovery scan.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

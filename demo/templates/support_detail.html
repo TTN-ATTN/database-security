@@ -1,0 +1,67 @@
+{% extends "_layout.html" %}
+{% block title %}Customer #{{ cid }} — Support{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+
+    <a href="{{ url_for('support_list') }}" class="btn btn-sm btn-outline-secondary mb-3">← Back to list</a>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h4">🎧 Customer #{{ cid }} (masked view)</h2>
+        {% if detail %}
+        <table class="table table-sm result-table">
+          <tbody>
+            <tr><td class="field-name">id</td><td>{{ detail.id }}</td></tr>
+            <tr><td class="field-name">first_name</td><td>{{ detail.first_name }}</td></tr>
+            <tr><td class="field-name">last_name</td><td>{{ detail.last_name }}</td></tr>
+            <tr><td class="field-name">email</td><td class="field-masked">{{ detail.email }}</td></tr>
+            <tr><td class="field-name">phone</td><td class="field-masked">{{ detail.phone }}</td></tr>
+            <tr><td class="field-name">address</td><td class="field-masked">{{ detail.address }}</td></tr>
+            <tr><td class="field-name">ssn</td><td class="field-denied">❌ NOT IN VIEW (Tier 1, encrypted)</td></tr>
+            <tr><td class="field-name">credit_card</td><td class="field-denied">❌ NOT IN VIEW (Tier 1, encrypted)</td></tr>
+          </tbody>
+        </table>
+        {% else %}
+        <div class="alert alert-warning">Không tìm thấy customer #{{ cid }}.</div>
+        {% endif %}
+
+        <div class="alert alert-info mt-3">
+          <strong>📝 Phân lớp dữ liệu (data classification):</strong>
+          <ul class="mb-0">
+            <li><strong>Tier 2 (masked)</strong>: email/phone/address — bạn thấy nhưng bị che. View <code>users_masked</code> dùng CONCAT/LEFT/RIGHT để mask ở SQL.</li>
+            <li><strong>Tier 1 (encrypted)</strong>: ssn/credit_card — không có trong view, bạn không thấy. Encrypt tại Acra theo client_id.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-danger">
+      <div class="card-body">
+        <h3 class="h5">⚔️ Thử raw access (bypass attempt)</h3>
+        <p class="text-muted small">
+          Backend vừa tự động chạy <code>SELECT ssn, credit_card FROM users WHERE id={{ cid }}</code>
+          với tư cách user <code>support</code>. Đây là cái mà attacker (hoặc support staff phẫn nộ) sẽ thử.
+        </p>
+        {% if raw_denied %}
+        <div class="alert alert-success">
+          🛑 <strong>MySQL từ chối</strong>: <code class="d-block mt-2 p-2 bg-light text-dark rounded">{{ raw_denied }}</code>
+          <p class="small mb-0 mt-2">
+            User <code>support</code> không có <code>SELECT</code> grant trên <code>users</code> raw.
+            Đây là <strong>RBAC tại tầng DB</strong> (phòng tuyến cuối) — vào tới MySQL rồi vẫn không đọc được.
+            Phòng thủ này hiệu lực <em>kể cả khi app code dở</em>.
+          </p>
+        </div>
+        {% else %}
+        <div class="alert alert-danger">⚠️ Raw access KHÔNG bị chặn (configuration error)</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% include "_live_log.html" %}
+  </div>
+</div>
+{% endblock %}

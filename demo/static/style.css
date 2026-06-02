@@ -94,6 +94,38 @@ body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* ── Login page ──────────────────────────────────────────────────────────────── */
+.login-card {
+  border-width: 2px;
+  text-align: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.login-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 14px rgba(0,0,0,.08);
+}
+
+/* ── Live log tail sidebar ──────────────────────────────────────────────────── */
+.sidebar-card {
+  border-radius: 0.5rem;
+}
+.log-tail {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  height: 360px;
+  overflow-y: auto;
+  padding: 0.6rem 0.8rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Navbar role badge tweaks */
+.navbar .badge { font-size: 0.7rem; }
+
 /* ── Verdict + why explain boxes ───────────────────────────────────────────── */
 .verdict-box {
   margin-top: 1rem;
