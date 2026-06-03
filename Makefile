@@ -7,6 +7,8 @@
        scan-schema scan-data check-phase6 phase6 \
        chain-up chain-down chain-verify ha-bootstrap ha-verify ha-failover ha-down \
        full-up full-verify regression \
+       classify-apply classify-verify self-service-demo ha-rw-demo \
+       demo-up demo-clean demo-clean-all phase7_part2 \
        clean clean-volumes \
        venv pip-install
 
@@ -178,6 +180,9 @@ ha-verify: ## Phase 7: verify HA cluster health + router primary tracking
 ha-failover: ## Phase 7: kill primary, prove cluster re-elects + router reroutes
 	python3 scripts/phase7_ha_failover.py
 
+ha-rw-demo: ## Phase 7: prove R/W split (writes->primary, reads->secondaries) via ha-router
+	python3 scripts/phase7_ha_rw_demo.py
+
 ha-down: ## Phase 7: tear down HA cluster + router (base stack untouched)
 	bash scripts/phase7_ha_down.sh
 
@@ -189,6 +194,110 @@ full-verify: ## Phase 7: verify full integrated path (DBF + encrypt + HA)
 
 regression: ## Phase 7: confirm Phases 1-6 still pass in default mode
 	bash scripts/phase7_regression.sh
+
+# ---------- phase 7.5: data classification (3-tier: encrypt / mask / clear) ----------
+
+classify-apply: ## Phase 7.5: migrate schema + Acra/ProxySQL config + encrypt ssn/cc in place
+	bash scripts/phase7_5_apply.sh
+
+classify-verify: ## Phase 7.5: verify support=masked, fraud=decrypted, DBA=ciphertext, self=own-row
+	python3 scripts/phase7_5_verify.py
+
+self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure gate
+	python3 scripts/phase7_self_service_demo.py
+
+# ---------- web demo UI ----------
+
+demo-up: phase7_part2 ## Bootstrap everything (idempotent) + launch Flask at http://127.0.0.1:5000
+	@echo ""
+	@echo "Starting Flask demo. Open http://127.0.0.1:5000 in your browser."
+	@echo "Press Ctrl+C to stop."
+	@echo ""
+	python3 demo/app.py
+
+demo-clean: ## Safe cleanup: kill Flask + remove __pycache__ + truncate demo DB rows
+	bash scripts/cleanup_demo_artifacts.sh --demo-data
+
+demo-clean-all: ## Full cleanup: stop Flask, drop demo data, truncate logs, tear down HA + base stack (volumes preserved)
+	bash scripts/cleanup_demo_artifacts.sh --all
+
+# ---------- phase 7 part 2: ONE-SHOT DEMO SETUP ----------
+# Idempotent: safe to re-run. Skips work that's already done.
+# After this completes, run `make demo-up` to start the Flask UI.
+
+phase7_part2: env ## ⭐ Setup Phase 7 demo end-to-end (acra keys + chained + HA cluster)
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo "  Phase 7 part 2 — full demo setup (base + chained + HA + classify)"
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "── 1/5 ensure Acra master key ──"
+	@if grep -q '^ACRA_MASTER_KEY=' .env 2>/dev/null; then \
+	  echo "  ACRA_MASTER_KEY already in .env (skip generation)"; \
+	else \
+	  $(MAKE) -s acra-keys; \
+	fi
+	@echo ""
+	@echo "── 2/5 base stack up (~30s) ──"
+	$(COMPOSE) up -d
+	@echo "  waiting for MySQL healthy …"
+	@for i in $$(seq 1 60); do \
+	  st=$$(docker inspect -f '{{.State.Health.Status}}' dbsec-mysql 2>/dev/null || echo missing); \
+	  [ "$$st" = "healthy" ] && { echo "  MySQL healthy"; break; }; \
+	  printf "."; sleep 2; \
+	  [ "$$i" = "60" ] && { echo " TIMEOUT"; exit 1; }; \
+	done
+	@echo ""
+	@echo "── 3/6 ensure schema + seed (idempotent) ──"
+	@HAS_FIRSTNAME=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='testdb' AND table_name='users' AND column_name='first_name';" 2>/dev/null); \
+	if [ "$$HAS_FIRSTNAME" != "1" ]; then \
+	  echo "  users table missing or wrong schema — applying schema.sql / masking.sql / rbac.sql / proxysql-users.sql / phase4_encryption_demo.sql"; \
+	  $(MAKE) -s schema; \
+	  docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/proxysql-users.sql; \
+	  docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/phase4_encryption_demo.sql; \
+	else \
+	  echo "  users table OK (has first_name column)"; \
+	  HAS_DBFUSER=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	    "SELECT COUNT(*) FROM mysql.user WHERE user='dbfuser';" 2>/dev/null); \
+	  if [ "$${HAS_DBFUSER:-0}" != "1" ]; then \
+	    echo "  dbfuser missing — applying proxysql-users.sql"; \
+	    docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/proxysql-users.sql; \
+	  fi; \
+	fi
+	@COUNT=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	  "SELECT COUNT(*) FROM testdb.users;" 2>/dev/null); \
+	if [ "$${COUNT:-0}" -lt "100" ]; then \
+	  echo "  users count $${COUNT:-0} < 100 — seeding 1000 demo rows"; \
+	  python3 scripts/phase2_seed_all.py; \
+	else \
+	  echo "  users seeded ($${COUNT} rows)"; \
+	fi
+	@echo ""
+	@echo "── 4/6 chained mode + classification (~1-2min) ──"
+	@bash scripts/phase7_5_apply.sh
+	@echo ""
+	@echo "── 5/6 HA cluster bootstrap (~2-3min, ~1.5GB RAM) ──"
+	@if docker ps --format '{{.Names}}' | grep -qE '^(dbsec-mysql-[123]|dbsec-ha-router)$$'; then \
+	  echo "  HA cluster already running (skip bootstrap)"; \
+	else \
+	  bash scripts/phase7_ha_bootstrap.sh; \
+	fi
+	@echo ""
+	@echo "── 6/6 sanity check ──"
+	@python3 scripts/phase7_5_verify.py 2>&1 | tail -4
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo "  ✅ Demo stack ready. Next:"
+	@echo ""
+	@echo "    make demo-up          # launch Flask at http://127.0.0.1:5000"
+	@echo ""
+	@echo "  Login flow on the web UI:"
+	@echo "    Alice/Bob = customer | Carol = support | Dave = admin"
+	@echo ""
+	@echo "  When done, see demo/CLEANUP.md or run:"
+	@echo "    make demo-clean-all   # frees ~1.5GB RAM (tears down HA)"
+	@echo "════════════════════════════════════════════════════════════════════"
 
 # ---------- cleanup ----------
 

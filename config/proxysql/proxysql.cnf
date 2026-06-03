@@ -50,5 +50,11 @@ mysql_servers=
 # with mysql_native_password (see mysql/proxysql-users.sql).
 mysql_users=
 (
-    { username="dbfuser", password="dbfpass", default_hostgroup=0, active=1, transaction_persistent=1 }
+    { username="dbfuser", password="dbfpass", default_hostgroup=0, active=1, transaction_persistent=1 },
+    # Phase 7.5 - per-user passthrough. ProxySQL re-logs into the backend as the same
+    # user, so MySQL sees the real identity (support / fraud / self_service) for RBAC,
+    # view masking and stored-procedure-gated self access.
+    { username="support",      password="supportpass", default_hostgroup=0, active=1, transaction_persistent=1 },
+    { username="fraud",        password="fraudpass",   default_hostgroup=0, active=1, transaction_persistent=1 },
+    { username="self_service", password="selfpass",    default_hostgroup=0, active=1, transaction_persistent=1 }
 )

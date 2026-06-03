@@ -1,0 +1,450 @@
+{% extends "_layout.html" %}
+{% block title %}Operations — atmnc{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-xl-8">
+
+    <h1 class="h4 mb-3">Operations</h1>
+
+    <!-- Raw data at rest -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Storage sample</h2>
+          <span class="small text-muted">SELECT * FROM users WHERE id=1 — direct (no proxy)</span>
+        </div>
+        {% if raw %}
+        <table class="table table-sm mb-0 detail-table">
+          <tbody>
+            <tr><td class="field-name">id</td><td>{{ raw.id }}</td></tr>
+            <tr><td class="field-name">name</td><td>{{ raw.first_name }} {{ raw.last_name }}</td></tr>
+            <tr><td class="field-name">ssn</td>
+              <td class="font-mono small">[{{ raw.ssn_len }}B] 0x{{ raw.ssn_hex }}…</td></tr>
+            <tr><td class="field-name">credit_card</td>
+              <td class="font-mono small">[{{ raw.cc_len }}B] 0x{{ raw.cc_hex }}…</td></tr>
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-muted small">Unable to read.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- SQL playground (DBA, direct to MySQL :3307) -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">SQL</h2>
+          <span class="small text-muted">Run as <code>root</code> on MySQL :3307 (no proxy, no Acra)</span>
+        </div>
+        <textarea id="admin-sql" class="form-control font-mono small" rows="3">SELECT id, first_name, HEX(LEFT(ssn,16)) AS ssn_hex, HEX(LEFT(credit_card,16)) AS cc_hex FROM users LIMIT 3</textarea>
+        <div class="d-flex justify-content-end align-items-center mt-2">
+          <button id="admin-run" class="btn btn-sm btn-dark">Run</button>
+        </div>
+        <div class="small text-muted mt-3">
+          Try:
+          <a href="#" class="admin-payload ms-2" data-payload="SELECT id, first_name, ssn, credit_card FROM users LIMIT 5">SELECT raw</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="admin-payload ms-1" data-payload="SELECT id, CAST(ssn AS CHAR) FROM users LIMIT 3">Try CAST</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="admin-payload ms-1" data-payload="DROP TABLE testdb.temp_demo">DROP (no DBF here)</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="admin-payload ms-1" data-payload="SHOW GRANTS FOR 'support'@'%'">SHOW GRANTS support</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="admin-payload ms-1" data-payload="SHOW PROCESSLIST">SHOW PROCESSLIST</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="admin-payload ms-1" data-payload="SELECT COUNT(*) FROM users">COUNT</a>
+        </div>
+        <div id="admin-sql-result" class="mt-3 d-none"></div>
+      </div>
+    </div>
+
+    <!-- HA Infrastructure -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-3">
+          <h2 class="h6 mb-0">Database cluster</h2>
+          <span class="small text-muted">Group Replication, 3 nodes</span>
+        </div>
+        {% if ha_up %}
+        <div class="row g-2 mb-2">
+          {% for n in nodes %}
+          {% set ok = n.running %}
+          {% set primary = (n.role == 'primary' and ok) %}
+          <div class="col-md-4">
+            <div class="node-card {% if ok %}node-online{% else %}node-down{% endif %}">
+              <div class="d-flex justify-content-between align-items-start">
+                <div>
+                  <div class="node-name">{{ n.name }}</div>
+                  <div class="node-meta">
+                    <span class="status-dot {% if ok %}dot-green{% else %}dot-red{% endif %}"></span>
+                    {{ n.status }}{% if primary %} · primary{% elif ok %} · {{ n.role }}{% endif %}
+                  </div>
+                </div>
+                {% if ok %}
+                  <button class="btn btn-sm btn-outline-secondary node-btn" data-action="stop" data-node="{{ n.name }}">Stop</button>
+                {% else %}
+                  <button class="btn btn-sm btn-success node-btn" data-action="start" data-node="{{ n.name }}">Start</button>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div id="ha-result" class="small mt-2 d-none"></div>
+        {% else %}
+        <div class="text-muted small">HA router offline. Run <code>make demo-up</code>.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- HA pulse — prove writes survive failover -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">HA pulse</h2>
+          <span class="small text-muted">INSERT through ha-router :6450 every 2s</span>
+        </div>
+        <p class="small text-muted mb-2">
+          Bật <strong>Auto-pulse</strong> → mỗi 2s gửi 1 write qua ha-router, ghi node nào nhận write.
+          Bấm <strong>Stop</strong> primary ở panel trên → các pulse fail ~5-8s rồi resume trên primary mới.
+        </p>
+        <div class="d-flex gap-2 align-items-center mb-2">
+          <button id="pulse-once" class="btn btn-sm btn-outline-secondary">Pulse once</button>
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="pulse-auto">
+            <label class="form-check-label small" for="pulse-auto">Auto-pulse (2s)</label>
+          </div>
+          <span class="ms-auto small">
+            <span class="text-success" id="pulse-ok-count">0</span> ok ·
+            <span class="text-danger" id="pulse-fail-count">0</span> fail
+          </span>
+        </div>
+        <div class="pulse-timeline mb-2" id="pulse-timeline"></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 detail-table">
+            <thead><tr><th>time</th><th>result</th><th>node</th><th class="text-end">ms</th></tr></thead>
+            <tbody id="pulse-history"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Database firewall rules -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Database firewall</h2>
+          <button class="btn btn-sm btn-link p-0 small" id="rules-refresh">Refresh</button>
+        </div>
+        <p class="small text-muted mb-2">
+          Rules loaded into ProxySQL. <strong>hits</strong> tăng mỗi lần query trùng pattern.
+          Bật <em>Customers</em> page rồi search <code>' OR '1'='1</code> → cột hits của rule SQLi sẽ +1.
+        </p>
+        <div id="rules-panel">
+          <div class="text-muted small">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Load testing -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Load testing</h2>
+          <a href="http://127.0.0.1:3000" target="_blank" class="small text-muted">Open Grafana →</a>
+        </div>
+        <div class="row g-2">
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="slow_query">Slow query (90s)</button></div>
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="conn_burst">Connection burst</button></div>
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="mixed_load">Mixed workload</button></div>
+        </div>
+        <div id="stress-result" class="small mt-2 text-muted d-none"></div>
+      </div>
+    </div>
+
+    <!-- Compliance scan link -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Compliance scan</h2>
+          <a href="{{ url_for('admin_discovery') }}" class="btn btn-sm btn-dark">Open scan →</a>
+        </div>
+        <p class="small text-muted mb-0">
+          PII discovery scanner — quét regex SSN / credit card / email / phone trên mọi cột text,
+          cross-check grants để chỉ ra dữ liệu lộ cho ai. Mở trang riêng để xem chi tiết.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="col-xl-4">
+    {% include "_live_log.html" %}
+
+    <div class="card mt-3 sidebar-card">
+      <div class="card-header bg-white py-2 d-flex justify-content-between border-bottom">
+        <strong class="small">Alerts</strong>
+        <span class="small text-muted" id="alerts-status">—</span>
+      </div>
+      <div class="card-body p-2" id="alerts-body">
+        <div class="text-muted small">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── HA stop / start ──────────────────────────────────────────────────────────
+function setNodeButtonsDisabled(state) {
+  document.querySelectorAll(".node-btn").forEach(x => x.disabled = state);
+}
+
+document.querySelectorAll(".node-btn").forEach(b => {
+  b.addEventListener("click", async () => {
+    const node = b.dataset.node;
+    const action = b.dataset.action;   // "stop" | "start"
+    const out = document.getElementById("ha-result");
+    out.classList.remove("d-none");
+    out.className = "small mt-2 text-muted";
+    out.textContent = action === "stop"
+      ? `Stopping ${node}, waiting for election…`
+      : `Starting ${node} and rejoining group…`;
+    setNodeButtonsDisabled(true);
+    try {
+      const r = await fetch(`/admin/${action}/${node}`, {method: "POST"});
+      const j = await r.json();
+      if (j.error) {
+        out.className = "small mt-2 text-danger";
+        out.textContent = j.error;
+      } else if (action === "stop") {
+        out.className = "small mt-2";
+        out.innerHTML = j.primary_changed
+          ? `Stopped <code>${node}</code>. New primary: <code>${j.primary_now}</code>. <a href="${location.href}">Reload</a>`
+          : `Stopped <code>${node}</code>. Primary unchanged: <code>${j.primary_now}</code>. <a href="${location.href}">Reload</a>`;
+      } else {
+        out.className = "small mt-2";
+        out.innerHTML = `Started <code>${node}</code>. Rejoined cluster. <a href="${location.href}">Reload</a>`;
+      }
+    } catch (e) {
+      out.className = "small mt-2 text-danger";
+      out.textContent = e;
+    }
+    setNodeButtonsDisabled(false);
+  });
+});
+
+// ── Firewall rules ───────────────────────────────────────────────────────────
+async function loadRules() {
+  const panel = document.getElementById("rules-panel");
+  panel.innerHTML = '<div class="text-muted small">Loading…</div>';
+  try {
+    const r = await fetch("/api/rules");
+    const j = await r.json();
+    if (j.error) {
+      panel.innerHTML = `<div class="text-danger small">${j.error}</div>`;
+      return;
+    }
+    let html = `<table class="table table-sm detail-table mb-0">
+      <thead><tr>
+        <th>#</th><th>Kind</th><th>Pattern</th><th>Action</th><th class="text-end">Hits</th>
+      </tr></thead><tbody>`;
+    for (const r of j.rules) {
+      const kindCls = r.kind === "DENY" ? "sev-high" : r.kind === "ROUTE" ? "sev-med" : "sev-low";
+      const action = r.error_msg
+        ? `<span class="text-danger small">${r.error_msg}</span>`
+        : r.destination_hostgroup !== null
+          ? `→ hg=${r.destination_hostgroup}`
+          : "—";
+      html += `<tr>
+        <td class="small text-muted">${r.rule_id}</td>
+        <td><span class="sev-pill ${kindCls}">${r.kind}</span></td>
+        <td class="font-mono small">${r.pattern || "—"}</td>
+        <td>${action}</td>
+        <td class="text-end font-mono">${r.hits.toLocaleString()}</td>
+      </tr>`;
+    }
+    html += "</tbody></table>";
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = `<div class="text-danger small">${e}</div>`;
+  }
+}
+loadRules();
+document.getElementById("rules-refresh").addEventListener("click", e => { e.preventDefault(); loadRules(); });
+
+// ── Stress test ──────────────────────────────────────────────────────────────
+document.querySelectorAll(".stress-btn").forEach(b => {
+  b.addEventListener("click", async () => {
+    const kind = b.dataset.stress;
+    const out = document.getElementById("stress-result");
+    out.classList.remove("d-none");
+    out.textContent = "Starting…";
+    try {
+      const r = await fetch(`/api/stress/${kind}`, {method: "POST"});
+      const j = await r.json();
+      out.textContent = j.started
+        ? `${kind} running (${j.duration}). Watch Grafana → Phase 5 dashboard.`
+        : `${kind} already in progress.`;
+    } catch (e) {
+      out.textContent = e;
+    }
+  });
+});
+
+// ── Alerts polling ───────────────────────────────────────────────────────────
+async function refreshAlerts() {
+  try {
+    const r = await fetch("/api/alerts");
+    const j = await r.json();
+    document.getElementById("alerts-status").textContent =
+      `${j.firing_count} firing · ${j.pending_count} pending`;
+    const body = document.getElementById("alerts-body");
+    if (j.firing.length === 0 && j.pending.length === 0) {
+      body.innerHTML = '<div class="text-muted small">No active alerts.</div>';
+    } else {
+      body.innerHTML = j.firing.map(a => `
+        <div class="alert-row alert-firing">
+          <div class="small fw-semibold">${a.name}</div>
+          <div class="small text-muted">${a.summary || a.instance}</div>
+        </div>`).join("") + j.pending.map(a => `
+        <div class="alert-row alert-pending">
+          <div class="small fw-semibold">${a.name} <span class="text-muted">(pending)</span></div>
+          <div class="small text-muted">${a.instance}</div>
+        </div>`).join("");
+    }
+  } catch (e) {
+    document.getElementById("alerts-status").textContent = "offline";
+  }
+}
+refreshAlerts();
+setInterval(refreshAlerts, 5000);
+
+// ── HA pulse — write+verify through ha-router every 2s ──────────────────────
+let pulseOk = 0, pulseFail = 0;
+let pulseAutoTimer = null;
+const PULSE_TIMELINE_LEN = 30;
+const pulseHistory = [];   // newest first
+
+function pulseTimelineRender() {
+  const el = document.getElementById("pulse-timeline");
+  // build dots oldest -> newest, latest at right
+  const view = pulseHistory.slice(0, PULSE_TIMELINE_LEN).reverse();
+  el.innerHTML = view.map(p =>
+    `<span class="pulse-dot pulse-${p.success ? 'ok' : 'fail'}" title="${p.title}"></span>`
+  ).join("");
+}
+
+function pulseHistoryRender() {
+  const tbody = document.getElementById("pulse-history");
+  tbody.innerHTML = pulseHistory.slice(0, 12).map(p => `
+    <tr>
+      <td class="small text-muted">${p.timestamp}</td>
+      <td>
+        <span class="status-dot ${p.success ? 'dot-green' : 'dot-red'}"></span>
+        <span class="small">${p.success ? 'ok' : 'fail'}</span>
+      </td>
+      <td><code class="small">${p.node || '—'}</code></td>
+      <td class="text-end small font-mono">${p.elapsed_ms}</td>
+    </tr>
+  `).join("");
+}
+
+async function pulseSend() {
+  const t0 = new Date();
+  let entry;
+  try {
+    const r = await fetch("/api/admin/ha/pulse", {method: "POST"});
+    const j = await r.json();
+    entry = {
+      timestamp: t0.toLocaleTimeString(),
+      success: j.success,
+      node: j.node,
+      elapsed_ms: j.elapsed_ms,
+      title: j.success ? `${j.node} @ ${t0.toLocaleTimeString()}` : (j.error || "fail"),
+    };
+    if (j.success) pulseOk++;
+    else pulseFail++;
+  } catch (e) {
+    entry = {timestamp: t0.toLocaleTimeString(), success: false,
+             node: null, elapsed_ms: 0, title: e.toString()};
+    pulseFail++;
+  }
+  pulseHistory.unshift(entry);
+  if (pulseHistory.length > 60) pulseHistory.pop();
+  document.getElementById("pulse-ok-count").textContent = pulseOk;
+  document.getElementById("pulse-fail-count").textContent = pulseFail;
+  pulseTimelineRender();
+  pulseHistoryRender();
+}
+
+document.getElementById("pulse-once").addEventListener("click", pulseSend);
+document.getElementById("pulse-auto").addEventListener("change", e => {
+  if (e.target.checked) {
+    pulseSend();
+    pulseAutoTimer = setInterval(pulseSend, 2000);
+  } else {
+    if (pulseAutoTimer) clearInterval(pulseAutoTimer);
+    pulseAutoTimer = null;
+  }
+});
+
+// ── DBA SQL playground ───────────────────────────────────────────────────────
+document.querySelectorAll(".admin-payload").forEach(a => {
+  a.addEventListener("click", e => {
+    e.preventDefault();
+    const ta = document.getElementById("admin-sql");
+    ta.value = a.dataset.payload;
+    ta.focus();
+  });
+});
+
+document.getElementById("admin-run").addEventListener("click", async () => {
+  const sql = document.getElementById("admin-sql").value;
+  const out = document.getElementById("admin-sql-result");
+  out.classList.remove("d-none");
+  out.innerHTML = '<div class="text-muted small">Running…</div>';
+  try {
+    const r = await fetch("/api/admin/query", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({sql}),
+    });
+    const j = await r.json();
+    if (j.error) {
+      out.innerHTML = `
+        <div class="card"><div class="card-body">
+          <div class="empty-state">
+            <div class="empty-title text-danger">Query rejected</div>
+            <pre class="error-trace mt-2 mb-0">${j.error}</pre>
+          </div>
+        </div></div>`;
+      return;
+    }
+    if (j.affected !== null && j.affected !== undefined && (!j.columns || j.columns.length === 0)) {
+      out.innerHTML = `<div class="text-muted small">OK (${j.affected} row${j.affected === 1 ? '' : 's'} affected).</div>`;
+      return;
+    }
+    if (!j.columns || j.columns.length === 0) {
+      out.innerHTML = '<div class="text-muted small">OK (no result set).</div>';
+      return;
+    }
+    let html = '<div class="card"><div class="card-body p-0"><table class="table table-sm mb-0 detail-table"><thead><tr>';
+    for (const c of j.columns) html += `<th>${c}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const row of j.rows) {
+      html += '<tr>';
+      for (const v of row) html += `<td class="small font-mono">${v === null ? '<em class="text-muted">null</em>' : String(v).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</td>`;
+      html += '</tr>';
+    }
+    html += '</tbody></table></div></div>';
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<div class="text-danger small">${e}</div>`;
+  }
+});
+</script>
+{% endblock %}

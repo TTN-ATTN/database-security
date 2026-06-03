@@ -1,0 +1,32 @@
+{% extends "_layout.html" %}
+{% block title %}Sign in — atmnc{% endblock %}
+
+{% block content %}
+<div class="login-wrap mx-auto" style="max-width: 720px;">
+  <div class="mb-4">
+    <h1 class="h3 mb-1 brand-large">atmnc</h1>
+    <p class="text-muted small mb-0">Sign in to continue.</p>
+  </div>
+
+  {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+
+  <div class="row g-3">
+    {% for username, u in users.items() %}
+    <div class="col-md-6">
+      <form method="post" action="{{ url_for('login') }}" class="m-0">
+        <input type="hidden" name="username" value="{{ username }}">
+        <button type="submit" class="login-card btn btn-light w-100 text-start p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <div class="fw-semibold">{{ u.display_name }}</div>
+              <div class="small text-muted">{{ u.subtitle }}</div>
+            </div>
+            <span class="small text-muted">{{ u.role }} →</span>
+          </div>
+        </button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

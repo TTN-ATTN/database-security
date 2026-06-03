@@ -1,0 +1,158 @@
+{% extends "_layout.html" %}
+{% block title %}Account #{{ requested_id }} — atmnc{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+
+    <div class="d-flex justify-content-between align-items-end mb-3">
+      <div>
+        <h1 class="h4 mb-0">Account</h1>
+        <div class="small text-muted">
+          Viewing <code>id={{ requested_id }}</code>
+          {% if is_idor_attempt %}<span class="text-danger">— not yours (signed in as id={{ session_id }})</span>{% endif %}
+        </div>
+      </div>
+      <div class="small text-muted">
+        Switch:
+        {% for i in [1, 2, 3, 7, 42, 999] %}
+        <a href="{{ url_for('customer_profile', id=i) }}"
+           class="badge bg-{% if i == requested_id %}dark{% else %}light text-dark border{% endif %} text-decoration-none ms-1">{{ i }}</a>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if blocked %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="empty-state">
+          <div class="empty-title">403 — Forbidden</div>
+          <p class="text-muted mb-2">You do not have access to this account.</p>
+          <details>
+            <summary class="small text-muted">Server response</summary>
+            <pre class="error-trace mt-2 mb-0">{{ blocked }}</pre>
+          </details>
+        </div>
+      </div>
+    </div>
+    {% elif profile %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <table class="table table-sm mb-0 detail-table">
+          <tbody>
+            {% for k, v in profile.items() %}
+            <tr>
+              <td class="field-name">{{ k }}</td>
+              <td>{{ v }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- SQL playground -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">SQL</h2>
+          <span class="small text-muted">Run as <code>self_service</code></span>
+        </div>
+        <textarea id="sql-input" class="form-control font-mono small" rows="3">{{ sql_shown }}</textarea>
+        <div class="d-flex justify-content-between align-items-center mt-2">
+          <div class="small text-muted">
+            Token cho id={{ session_id }}:
+            <code class="font-mono" style="font-size:.7rem;">{{ token_full }}</code>
+            <a href="#" id="copy-token" class="ms-1">copy</a>
+          </div>
+          <button id="run-sql" class="btn btn-sm btn-dark">Run</button>
+        </div>
+        <div class="small text-muted mt-3">
+          Try attack:
+          <a href="#" class="payload-link ms-2" data-payload="CALL get_my_profile(2, '{{ token_full }}')">IDOR</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="payload-link ms-1" data-payload="SELECT * FROM users WHERE id=1 OR '1'='1'">SQL injection</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="payload-link ms-1" data-payload="DROP TABLE users">DROP TABLE</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="payload-link ms-1" data-payload="TRUNCATE TABLE users">TRUNCATE</a>
+          <span class="text-muted">·</span>
+          <a href="#" class="payload-link ms-1" data-payload="SELECT ssn, credit_card FROM users LIMIT 5">SELECT raw</a>
+        </div>
+        <div id="sql-result" class="mt-3 d-none"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% include "_live_log.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN_FULL = {{ token_full|tojson }};
+
+document.getElementById("copy-token").addEventListener("click", e => {
+  e.preventDefault();
+  navigator.clipboard.writeText(TOKEN_FULL).then(() => {
+    e.target.textContent = "copied";
+    setTimeout(() => e.target.textContent = "copy", 1500);
+  });
+});
+
+document.querySelectorAll(".payload-link").forEach(a => {
+  a.addEventListener("click", e => {
+    e.preventDefault();
+    const ta = document.getElementById("sql-input");
+    ta.value = a.dataset.payload;
+    ta.focus();
+  });
+});
+
+document.getElementById("run-sql").addEventListener("click", async () => {
+  const sql = document.getElementById("sql-input").value;
+  const out = document.getElementById("sql-result");
+  out.classList.remove("d-none");
+  out.innerHTML = '<div class="text-muted small">Running…</div>';
+  try {
+    const r = await fetch("/api/customer/query", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({sql}),
+    });
+    const j = await r.json();
+    if (j.error) {
+      out.innerHTML = `
+        <div class="card">
+          <div class="card-body">
+            <div class="empty-state">
+              <div class="empty-title text-danger">Query rejected</div>
+              <pre class="error-trace mt-2 mb-0">${j.error}</pre>
+            </div>
+          </div>
+        </div>`;
+      return;
+    }
+    if (!j.columns || j.columns.length === 0) {
+      out.innerHTML = '<div class="text-muted small">OK (no rows returned).</div>';
+      return;
+    }
+    let html = '<div class="card"><div class="card-body p-0"><table class="table table-sm mb-0 detail-table"><thead><tr>';
+    for (const c of j.columns) html += `<th>${c}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const row of j.rows) {
+      html += '<tr>';
+      for (const v of row) html += `<td class="small">${v === null ? '<em class="text-muted">null</em>' : String(v).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</td>`;
+      html += '</tr>';
+    }
+    html += '</tbody></table></div></div>';
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<div class="text-danger small">${e}</div>`;
+  }
+});
+</script>
+{% endblock %}

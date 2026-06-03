@@ -1,0 +1,53 @@
+{% extends "_layout.html" %}
+{% block title %}Customer #{{ cid }} — atmnc{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+
+    <a href="{{ url_for('support_list') }}" class="small text-muted text-decoration-none">← Back to customers</a>
+
+    <h1 class="h4 my-3">Customer #{{ cid }}</h1>
+
+    {% if detail %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <table class="table table-sm mb-0 detail-table">
+          <tbody>
+            <tr><td class="field-name">ID</td><td>{{ detail.id }}</td></tr>
+            <tr><td class="field-name">Name</td><td>{{ detail.first_name }} {{ detail.last_name }}</td></tr>
+            <tr><td class="field-name">Email</td><td class="text-muted">{{ detail.email }}</td></tr>
+            <tr><td class="field-name">Phone</td><td class="text-muted">{{ detail.phone }}</td></tr>
+            <tr><td class="field-name">Address</td><td class="text-muted">{{ detail.address }}</td></tr>
+            <tr><td class="field-name">SSN</td><td class="text-secondary"><em>restricted</em></td></tr>
+            <tr><td class="field-name">Credit card</td><td class="text-secondary"><em>restricted</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card mb-3">
+      <div class="card-body empty-state">
+        <div class="empty-title">Not found</div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if raw_denied %}
+    <div class="card border-0 bg-transparent">
+      <div class="card-body p-0">
+        <details>
+          <summary class="small text-muted">Why are SSN and credit card restricted?</summary>
+          <pre class="error-trace mt-2">{{ raw_denied }}</pre>
+        </details>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <div class="col-lg-4">
+    {% include "_live_log.html" %}
+  </div>
+</div>
+{% endblock %}
