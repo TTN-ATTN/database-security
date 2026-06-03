@@ -647,14 +647,37 @@ def _run_stress_thread(kind, fn):
 
 
 def _stress_slow_query():
-    """SELECT SLEEP(8) - lands in slow_query log (long_query_time defaults to 2s)."""
-    try:
-        conn = pymysql.connect(**DBFUSER, connect_timeout=5, read_timeout=20)
-        cur = conn.cursor()
-        cur.execute("SELECT SLEEP(8), 'phase5-slow-query-demo' AS tag")
-        cur.fetchall(); cur.close(); conn.close()
-    except Exception:
-        pass
+    """Sustained slow queries for ~90s so the Prometheus alert actually fires.
+
+    Alert rule: rate(mysql_global_status_slow_queries[2m]) > 0.5 for 1m.
+    Strategy: 8 parallel workers, each running SELECT SLEEP(3) in a loop. 8/3
+    ≈ 2.7 slow queries per second — well above the 0.5/s threshold. After ~60s
+    the alert moves from inactive -> pending -> firing in Alertmanager.
+    """
+    import threading as _t
+    stop_flag = {"stop": False}
+
+    def worker():
+        try:
+            conn = pymysql.connect(**DBFUSER, connect_timeout=5, read_timeout=15)
+            cur = conn.cursor()
+            while not stop_flag["stop"]:
+                try:
+                    cur.execute("SELECT SLEEP(3), 'phase5-slow-query-demo'")
+                    cur.fetchall()
+                except Exception:
+                    break
+            cur.close(); conn.close()
+        except Exception:
+            pass
+
+    workers = [_t.Thread(target=worker, daemon=True) for _ in range(8)]
+    for w in workers:
+        w.start()
+    time.sleep(90)  # let workers run for ~90s
+    stop_flag["stop"] = True
+    for w in workers:
+        w.join(timeout=20)
 
 
 def _stress_conn_burst():
@@ -708,9 +731,9 @@ def _stress_mixed_load():
 @app.post("/api/stress/<kind>")
 def stress(kind):
     plans = {
-        "slow_query": (_stress_slow_query, "SELECT SLEEP(8) - sẽ vào slow.log, kích "
-                       "alert MysqlSlowQueryRateHigh nếu lặp đủ tần suất",
-                       "8s"),
+        "slow_query": (_stress_slow_query, "8 worker × SELECT SLEEP(3) trong 90s, "
+                       "≈ 2.7 slow query/s → kích alert MySQLSlowQueryRateHigh",
+                       "90s"),
         "conn_burst": (_stress_conn_burst, "Mở 50 connection cùng lúc, giữ 10s - "
                        "kích Threads_connected spike",
                        "~10s"),
@@ -854,11 +877,17 @@ def customer_profile():
     profile = None
     if row:
         profile = {c: to_text(v) for c, v in zip(cols, row)}
+    # Build the exact SQL we just ran, so the UI can show it and let the user
+    # edit + re-run it themselves. Token is truncated for display.
+    token_display = token[:16] + "…" + token[-8:]
+    sql_shown = f"CALL get_my_profile({requested_id}, '{token_display}')"
     return render_template(
         "customer.html",
         session_id=session_id, requested_id=requested_id,
         profile=profile, blocked=blocked,
         is_idor_attempt=(requested_id != session_id),
+        sql_shown=sql_shown,
+        token_full=token,
     )
 
 
@@ -961,57 +990,112 @@ def admin_dashboard():
     except Exception:
         pass
 
-    # Panel B: HA cluster nodes (if up)
-    nodes = []
-    if _ha_running():
+    # Panel B: HA cluster nodes — combine docker state + ProxySQL view so we
+    # correctly report nodes that are STOPPED (not just SHUNNED in proxysql).
+    nodes = _ha_node_inventory()
+
+    return render_template("admin.html",
+                           raw=raw, nodes=nodes, ha_up=_ha_router_up())
+
+
+def _ha_router_up():
+    """Just the ha-router container, regardless of node states."""
+    r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                       capture_output=True, text=True, check=False)
+    return "dbsec-ha-router" in r.stdout.split()
+
+
+def _ha_node_inventory():
+    """For each expected node, combine docker state + ProxySQL runtime status into
+    a single record the UI can render with the right buttons. Always returns 3
+    rows, one per expected node — so STOPPED nodes still appear in the list
+    instead of vanishing."""
+    expected = ["dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"]
+    # docker container state
+    docker_states = {}
+    for n in expected:
+        r = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", n],
+                           capture_output=True, text=True, check=False)
+        docker_states[n] = (r.stdout.strip() if r.returncode == 0 else "missing")
+    # ProxySQL view (only if router is up)
+    proxy_view = {}
+    if _ha_router_up():
         try:
             conn = pymysql.connect(
                 host=CHAIN_HOST, port=6452, user="radmin", password="radmin",
-                database="main", ssl_disabled=True, autocommit=True)
+                database="main", ssl_disabled=True, autocommit=True,
+                connect_timeout=2)
             cur = conn.cursor()
             cur.execute(
-                "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers "
-                "ORDER BY hostname")
+                "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers")
             for hg, host, status in cur.fetchall():
-                hg = int(hg)
-                role = "PRIMARY" if hg == 2 else ("SECONDARY" if hg == 3 else f"hg{hg}")
-                nodes.append({"name": host, "role": role, "status": status})
+                proxy_view[host] = (int(hg), status)
             cur.close(); conn.close()
         except Exception:
             pass
-    # Also include any HA containers that are offline (not in runtime_mysql_servers
-    # in OFFLINE/SHUNNED state).
-    container_names = {"dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"}
-    seen = {n["name"] for n in nodes}
-    if _ha_running():
-        for missing in container_names - seen:
-            nodes.append({"name": missing, "role": "?", "status": "OFFLINE"})
+    out = []
+    for name in expected:
+        d = docker_states.get(name, "missing")
+        pv = proxy_view.get(name)
+        running = (d == "running")
+        if running and pv and pv[1] == "ONLINE":
+            hg = pv[0]
+            role = "primary" if hg == 2 else ("replica" if hg == 3 else f"hg{hg}")
+            status = "ONLINE"
+        elif running and pv:
+            # node up but ProxySQL has it as SHUNNED/OFFLINE_SOFT etc.
+            role = "unknown"
+            status = pv[1]
+        elif running:
+            role = "starting"
+            status = "PENDING"
+        elif d == "exited":
+            role = "—"
+            status = "STOPPED"
+        else:
+            role = "—"
+            status = d.upper()
+        out.append({"name": name, "role": role, "status": status, "running": running})
+    return out
 
-    return render_template("admin.html",
-                           raw=raw, nodes=nodes, ha_up=_ha_running())
+
+_HA_ALLOWED = {"dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"}
 
 
-@app.post("/admin/kill/<node>")
+@app.post("/admin/stop/<node>")
 @require_role("admin")
-def admin_kill_node(node):
-    """Stop a specific GR node + try to rejoin it after failover. Returns JSON."""
-    allowed = {"dbsec-mysql-1", "dbsec-mysql-2", "dbsec-mysql-3"}
-    if node not in allowed:
-        return jsonify({"error": f"node not in allowlist: {allowed}"}), 400
-    if not _ha_running():
-        return jsonify({"error": "HA cluster not running"}), 503
-    # docker stop = SIGTERM = graceful "leaving group" -> election starts immediately
+def admin_stop_node(node):
+    """Stop a node and leave it stopped. Wait for the cluster to elect a new
+    primary (if the stopped one WAS primary) so the response is meaningful, but do
+    NOT auto-restart. Use /admin/start/<node> to bring it back."""
+    if node not in _HA_ALLOWED:
+        return jsonify({"error": f"node not in allowlist: {_HA_ALLOWED}"}), 400
+    if not _ha_router_up():
+        return jsonify({"error": "HA router not running"}), 503
+    primary_before = _ha_primary()
     subprocess.run(["docker", "stop", node], capture_output=True, check=False)
-    elected = None
-    primary_before = node  # the one we just killed was a primary or secondary
-    for _ in range(60):
-        time.sleep(0.5)
-        cur = _ha_primary()
-        if cur and cur != primary_before:
-            elected = cur
-            break
-    # Restart + rejoin so the cluster goes back to 3/3 after demo.
+    elected = primary_before  # if we stopped a non-primary, primary doesn't change
+    if primary_before == node:
+        for _ in range(60):
+            time.sleep(0.5)
+            cur = _ha_primary()
+            if cur and cur != primary_before:
+                elected = cur
+                break
+        else:
+            elected = "TIMEOUT"
+    return jsonify({"stopped": node, "primary_now": elected,
+                    "primary_changed": (elected != primary_before)})
+
+
+@app.post("/admin/start/<node>")
+@require_role("admin")
+def admin_start_node(node):
+    """Start a stopped node and re-join it to Group Replication."""
+    if node not in _HA_ALLOWED:
+        return jsonify({"error": f"node not in allowlist: {_HA_ALLOWED}"}), 400
     subprocess.run(["docker", "start", node], capture_output=True, check=False)
+    # wait until mysqld is reachable
     for _ in range(30):
         time.sleep(1)
         ping = subprocess.run(
@@ -1019,11 +1103,127 @@ def admin_kill_node(node):
             capture_output=True, check=False)
         if ping.returncode == 0:
             break
+    # group_replication_start_on_boot=OFF; rejoin manually
     subprocess.run(
         ["docker", "exec", node, "mysql", "-uroot", f"-p{ROOTPW}",
          "-e", "START GROUP_REPLICATION;"],
         capture_output=True, check=False)
-    return jsonify({"killed": node, "elected_primary": elected or "TIMEOUT"})
+    return jsonify({"started": node})
+
+
+# Back-compat alias (in case old links exist)
+@app.post("/admin/kill/<node>")
+@require_role("admin")
+def admin_kill_node_legacy(node):
+    """Legacy stop+restart in one shot (used to be the only behavior)."""
+    r = admin_stop_node(node)
+    if r.status_code != 200:
+        return r
+    admin_start_node(node)
+    return r
+
+
+# ── ProxySQL rules visualization ────────────────────────────────────────────────
+
+@app.get("/api/rules")
+@require_role("admin")
+def api_rules():
+    """Return DBF + R/W split rules from the chained ProxySQL admin (port 6032),
+    plus their cumulative hit counts. The UI renders this as a 'firewall' panel.
+    """
+    rules = []
+    try:
+        conn = pymysql.connect(host=CHAIN_HOST, port=6032,
+                               user="radmin", password="radmin",
+                               database="main", ssl_disabled=True,
+                               autocommit=True, connect_timeout=2)
+        cur = conn.cursor()
+        # runtime_mysql_query_rules has the rules; stats_mysql_query_rules has hits.
+        cur.execute("""
+            SELECT r.rule_id, r.match_pattern, r.destination_hostgroup,
+                   r.error_msg, r.apply,
+                   COALESCE(s.hits, 0) AS hits, r.comment
+              FROM runtime_mysql_query_rules r
+              LEFT JOIN stats_mysql_query_rules s ON r.rule_id = s.rule_id
+             WHERE r.active = 1
+             ORDER BY r.rule_id
+        """)
+        for row in cur.fetchall():
+            rule_id, pattern, dest_hg, err_msg, apply_flag, hits, comment = row
+            kind = "DENY" if err_msg else ("ROUTE" if dest_hg is not None else "PASS")
+            rules.append({
+                "rule_id": int(rule_id),
+                "kind": kind,
+                "pattern": pattern,
+                "destination_hostgroup": dest_hg,
+                "error_msg": err_msg,
+                "apply": int(apply_flag),
+                "hits": int(hits),
+                "comment": comment,
+            })
+        cur.close(); conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e), "rules": []}), 503
+    return jsonify({"rules": rules, "total": len(rules)})
+
+
+# ── Customer SQL playground ─────────────────────────────────────────────────────
+
+@app.post("/api/customer/query")
+@require_role("customer")
+def customer_query():
+    """Run an arbitrary SQL statement as the `self_service` MySQL user. The user
+    can edit the pre-filled CALL get_my_profile(id, token) — this is exactly the
+    pattern an app dev would write, so when they bump id without changing token,
+    the proc rejects them. Also lets them try `SELECT FROM users` (1142 RBAC) or
+    SQLi (1148 DBF) and see the defenses fire in real time.
+    """
+    sql = (request.get_json(silent=True) or {}).get("sql", "")
+    if not isinstance(sql, str) or not sql.strip():
+        return jsonify({"error": "empty SQL"}), 400
+    sql = sql.strip().rstrip(";")  # one statement at a time
+
+    rows, cols, error = None, [], None
+    try:
+        conn = pymysql.connect(**SELF_SERVICE, connect_timeout=5, read_timeout=10)
+        cur = conn.cursor()
+        cur.execute(sql)
+        # CALL on a SELECTing proc returns rows in the first result set.
+        if cur.description:
+            cols = [c[0] for c in cur.description]
+            rows = []
+            for r in cur.fetchall():
+                rows.append([to_text(v) for v in r])
+        cur.close(); conn.close()
+    except pymysql.MySQLError as err:
+        error = str(err).splitlines()[0]
+    except Exception as err:
+        error = str(err)
+    return jsonify({"sql": sql, "columns": cols, "rows": rows, "error": error})
+
+
+# ── PII discovery as its own page ───────────────────────────────────────────────
+
+@app.get("/admin/discovery")
+@require_role("admin")
+def admin_discovery():
+    return render_template("discovery.html")
+
+
+@app.get("/api/discovery/findings")
+@require_role("admin")
+def api_discovery_findings():
+    """Return the full findings list (with all fields from data_findings.json),
+    not the trimmed shape used by /api/discovery/scan. The dedicated page renders
+    this richer payload."""
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    findings_path = os.path.join(root, "logs", "discovery", "data_findings.json")
+    if not os.path.exists(findings_path):
+        return jsonify({"findings": [], "total": 0, "stale": True})
+    with open(findings_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    findings = data if isinstance(data, list) else data.get("findings", [])
+    return jsonify({"findings": findings, "total": len(findings), "stale": False})
 
 
 if __name__ == "__main__":

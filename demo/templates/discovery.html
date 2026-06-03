@@ -1,0 +1,179 @@
+{% extends "_layout.html" %}
+{% block title %}PII discovery — atmnc{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-baseline mb-3">
+  <div>
+    <h1 class="h4 mb-0">PII discovery</h1>
+    <div class="small text-muted">Quét regex (SSN / credit card / email / phone) trên mọi cột text + cross-check grants.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-sm btn-outline-secondary">← Operations</a>
+    <button id="scan-btn" class="btn btn-sm btn-dark">Run scan</button>
+  </div>
+</div>
+
+<div id="scan-progress" class="alert alert-info d-none small"></div>
+
+<div id="results" class="d-none">
+  <!-- summary cards -->
+  <div class="row g-2 mb-3">
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body p-3">
+      <div class="stat-num" id="stat-total">0</div>
+      <div class="stat-label">findings</div>
+    </div></div></div>
+    <div class="col-md-3"><div class="card stat-card border-danger"><div class="card-body p-3">
+      <div class="stat-num text-danger" id="stat-high">0</div>
+      <div class="stat-label">high severity</div>
+    </div></div></div>
+    <div class="col-md-3"><div class="card stat-card border-warning"><div class="card-body p-3">
+      <div class="stat-num text-warning" id="stat-exposed">0</div>
+      <div class="stat-label">EXPOSED to low-priv users</div>
+    </div></div></div>
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body p-3">
+      <div class="stat-num" id="stat-rows">0</div>
+      <div class="stat-label">PII matches</div>
+    </div></div></div>
+  </div>
+
+  <!-- per-finding cards (grouped, no giant table) -->
+  <div id="findings-list"></div>
+</div>
+
+<div id="empty-state" class="card d-none">
+  <div class="card-body empty-state">
+    <div class="empty-title">No findings yet</div>
+    <p class="text-muted mb-0">Click <strong>Run scan</strong> ở góc phải để quét testdb.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const VERDICT_BADGE = {
+  "EXPOSED":   "bg-danger",
+  "PROTECTED": "bg-success",
+};
+const SEV_CLS = {
+  "HIGH":   "sev-high",
+  "MEDIUM": "sev-med",
+  "LOW":    "sev-low",
+};
+
+function renderFindings(findings) {
+  const list = document.getElementById("findings-list");
+  list.innerHTML = "";
+  // sort: EXPOSED first, then HIGH severity, then by match_count desc
+  findings.sort((a, b) => {
+    const aE = (a.access_verdict || "").includes("EXPOSED") ? 0 : 1;
+    const bE = (b.access_verdict || "").includes("EXPOSED") ? 0 : 1;
+    if (aE !== bE) return aE - bE;
+    const sevOrder = {"HIGH": 0, "MEDIUM": 1, "LOW": 2};
+    const aS = sevOrder[a.severity] ?? 3;
+    const bS = sevOrder[b.severity] ?? 3;
+    if (aS !== bS) return aS - bS;
+    return (b.match_count || 0) - (a.match_count || 0);
+  });
+  for (const f of findings) {
+    const verdictCls = VERDICT_BADGE[f.access_verdict] || "bg-secondary";
+    const sevCls = SEV_CLS[f.severity] || "sev-low";
+    const exposedTo = (f.exposed_to || []).join(", ") || "—";
+    const exposurePath = (f.exposure_path || []).join("; ") || "—";
+    const examples = f.exposed_values ? f.exposed_values.slice(0, 3).map(v =>
+      `<code class="font-mono small d-block">${String(v).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</code>`
+    ).join("") : "";
+
+    list.innerHTML += `
+      <div class="card mb-2 finding-card">
+        <div class="card-body p-3">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div>
+              <code class="finding-loc">${f.table}.${f.column}</code>
+              <span class="sev-pill ${sevCls} ms-2">${f.severity || "?"}</span>
+              <span class="badge ${verdictCls} ms-1">${f.access_verdict || "?"}</span>
+            </div>
+            <div class="small text-muted">
+              <strong>${f.pattern_type}</strong> · ${f.match_count || 0}/${f.rows_affected || 0} matches
+            </div>
+          </div>
+          <div class="small mb-2">${f.assessment || ""}</div>
+          <table class="finding-grid">
+            <tr><td>Exposed to</td><td><code>${exposedTo}</code></td></tr>
+            <tr><td>Path</td><td class="small text-muted">${exposurePath}</td></tr>
+            ${examples ? `<tr><td>Sample matches</td><td>${examples}</td></tr>` : ""}
+            <tr><td>Remediation</td><td class="small">${f.remediation || "—"}</td></tr>
+          </table>
+        </div>
+      </div>`;
+  }
+}
+
+async function runScan() {
+  const progress = document.getElementById("scan-progress");
+  const results = document.getElementById("results");
+  const empty = document.getElementById("empty-state");
+  results.classList.add("d-none");
+  empty.classList.add("d-none");
+  progress.classList.remove("d-none");
+  progress.textContent = "Scanning testdb… (~5-15s)";
+  document.getElementById("scan-btn").disabled = true;
+  try {
+    const r = await fetch("/api/discovery/scan", {method: "POST"});
+    if (!r.ok) {
+      progress.className = "alert alert-danger small";
+      progress.textContent = "Scan failed: HTTP " + r.status;
+      return;
+    }
+    // Scan endpoint returns trimmed shape; pull full from /findings.
+    await r.json();
+    const r2 = await fetch("/api/discovery/findings");
+    const j = await r2.json();
+    progress.classList.add("d-none");
+    if (!j.findings || j.findings.length === 0) {
+      empty.classList.remove("d-none");
+      return;
+    }
+    // stats
+    document.getElementById("stat-total").textContent = j.total;
+    document.getElementById("stat-high").textContent =
+      j.findings.filter(f => f.severity === "HIGH").length;
+    document.getElementById("stat-exposed").textContent =
+      j.findings.filter(f => (f.access_verdict || "").includes("EXPOSED")).length;
+    document.getElementById("stat-rows").textContent =
+      j.findings.reduce((s, f) => s + (f.match_count || 0), 0);
+    renderFindings(j.findings);
+    results.classList.remove("d-none");
+  } catch (e) {
+    progress.className = "alert alert-danger small";
+    progress.textContent = e.toString();
+  } finally {
+    document.getElementById("scan-btn").disabled = false;
+  }
+}
+
+// auto-load existing findings on page open (so user can revisit without re-scanning)
+(async () => {
+  try {
+    const r = await fetch("/api/discovery/findings");
+    const j = await r.json();
+    if (j.findings && j.findings.length > 0) {
+      document.getElementById("stat-total").textContent = j.total;
+      document.getElementById("stat-high").textContent =
+        j.findings.filter(f => f.severity === "HIGH").length;
+      document.getElementById("stat-exposed").textContent =
+        j.findings.filter(f => (f.access_verdict || "").includes("EXPOSED")).length;
+      document.getElementById("stat-rows").textContent =
+        j.findings.reduce((s, f) => s + (f.match_count || 0), 0);
+      renderFindings(j.findings);
+      document.getElementById("results").classList.remove("d-none");
+    } else {
+      document.getElementById("empty-state").classList.remove("d-none");
+    }
+  } catch (e) {
+    document.getElementById("empty-state").classList.remove("d-none");
+  }
+})();
+
+document.getElementById("scan-btn").addEventListener("click", runScan);
+</script>
+{% endblock %}

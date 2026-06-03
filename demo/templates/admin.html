@@ -41,8 +41,8 @@
         {% if ha_up %}
         <div class="row g-2 mb-2">
           {% for n in nodes %}
-          {% set ok = (n.status == 'ONLINE') %}
-          {% set primary = (n.role == 'PRIMARY' and ok) %}
+          {% set ok = n.running %}
+          {% set primary = (n.role == 'primary' and ok) %}
           <div class="col-md-4">
             <div class="node-card {% if ok %}node-online{% else %}node-down{% endif %}">
               <div class="d-flex justify-content-between align-items-start">
@@ -50,20 +50,40 @@
                   <div class="node-name">{{ n.name }}</div>
                   <div class="node-meta">
                     <span class="status-dot {% if ok %}dot-green{% else %}dot-red{% endif %}"></span>
-                    {{ n.status }}{% if primary %} · primary{% elif ok %} · replica{% endif %}
+                    {{ n.status }}{% if primary %} · primary{% elif ok %} · {{ n.role }}{% endif %}
                   </div>
                 </div>
-                <button class="btn btn-sm btn-outline-secondary kill-btn" data-node="{{ n.name }}"
-                        {% if not ok %}disabled{% endif %}>Stop</button>
+                {% if ok %}
+                  <button class="btn btn-sm btn-outline-secondary node-btn" data-action="stop" data-node="{{ n.name }}">Stop</button>
+                {% else %}
+                  <button class="btn btn-sm btn-success node-btn" data-action="start" data-node="{{ n.name }}">Start</button>
+                {% endif %}
               </div>
             </div>
           </div>
           {% endfor %}
         </div>
-        <div id="kill-result" class="small mt-2 d-none"></div>
+        <div id="ha-result" class="small mt-2 d-none"></div>
         {% else %}
-        <div class="text-muted small">Cluster offline. Run <code>make ha-bootstrap</code>.</div>
+        <div class="text-muted small">HA router offline. Run <code>make demo-up</code>.</div>
         {% endif %}
+      </div>
+    </div>
+
+    <!-- Database firewall rules -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Database firewall</h2>
+          <button class="btn btn-sm btn-link p-0 small" id="rules-refresh">Refresh</button>
+        </div>
+        <p class="small text-muted mb-2">
+          Rules loaded into ProxySQL. <strong>hits</strong> tăng mỗi lần query trùng pattern.
+          Bật <em>Customers</em> page rồi search <code>' OR '1'='1</code> → cột hits của rule SQLi sẽ +1.
+        </p>
+        <div id="rules-panel">
+          <div class="text-muted small">Loading…</div>
+        </div>
       </div>
     </div>
 
@@ -75,7 +95,7 @@
           <a href="http://127.0.0.1:3000" target="_blank" class="small text-muted">Open Grafana →</a>
         </div>
         <div class="row g-2">
-          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="slow_query">Slow query</button></div>
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="slow_query">Slow query (90s)</button></div>
           <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="conn_burst">Connection burst</button></div>
           <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="mixed_load">Mixed workload</button></div>
         </div>
@@ -83,26 +103,17 @@
       </div>
     </div>
 
-    <!-- Compliance scan -->
+    <!-- Compliance scan link -->
     <div class="card mb-3">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-baseline mb-2">
           <h2 class="h6 mb-0">Compliance scan</h2>
-          <button class="btn btn-sm btn-dark" id="scan-btn">Run scan</button>
+          <a href="{{ url_for('admin_discovery') }}" class="btn btn-sm btn-dark">Open scan →</a>
         </div>
-        <p class="small text-muted mb-2">Scans text columns for SSN, credit card, email, phone patterns.</p>
-        <div id="scan-result" class="d-none">
-          <div id="scan-loading" class="small text-muted">Scanning…</div>
-          <div id="scan-content" class="d-none">
-            <div class="small text-muted mb-2"><span id="scan-total"></span></div>
-            <table class="table table-sm detail-table">
-              <thead><tr>
-                <th>Table</th><th>Column</th><th>Pattern</th><th>Severity</th><th>Verdict</th><th>Hits</th>
-              </tr></thead>
-              <tbody id="scan-rows"></tbody>
-            </table>
-          </div>
-        </div>
+        <p class="small text-muted mb-0">
+          PII discovery scanner — quét regex SSN / credit card / email / phone trên mọi cột text,
+          cross-check grants để chỉ ra dữ liệu lộ cho ai. Mở trang riêng để xem chi tiết.
+        </p>
       </div>
     </div>
 
@@ -126,32 +137,85 @@
 
 {% block scripts %}
 <script>
-document.querySelectorAll(".kill-btn").forEach(b => {
+// ── HA stop / start ──────────────────────────────────────────────────────────
+function setNodeButtonsDisabled(state) {
+  document.querySelectorAll(".node-btn").forEach(x => x.disabled = state);
+}
+
+document.querySelectorAll(".node-btn").forEach(b => {
   b.addEventListener("click", async () => {
     const node = b.dataset.node;
-    const out = document.getElementById("kill-result");
+    const action = b.dataset.action;   // "stop" | "start"
+    const out = document.getElementById("ha-result");
     out.classList.remove("d-none");
     out.className = "small mt-2 text-muted";
-    out.textContent = `Stopping ${node}, waiting for election…`;
-    document.querySelectorAll(".kill-btn").forEach(x => x.disabled = true);
+    out.textContent = action === "stop"
+      ? `Stopping ${node}, waiting for election…`
+      : `Starting ${node} and rejoining group…`;
+    setNodeButtonsDisabled(true);
     try {
-      const r = await fetch(`/admin/kill/${node}`, {method: "POST"});
+      const r = await fetch(`/admin/${action}/${node}`, {method: "POST"});
       const j = await r.json();
       if (j.error) {
         out.className = "small mt-2 text-danger";
         out.textContent = j.error;
+      } else if (action === "stop") {
+        out.className = "small mt-2";
+        out.innerHTML = j.primary_changed
+          ? `Stopped <code>${node}</code>. New primary: <code>${j.primary_now}</code>. <a href="${location.href}">Reload</a>`
+          : `Stopped <code>${node}</code>. Primary unchanged: <code>${j.primary_now}</code>. <a href="${location.href}">Reload</a>`;
       } else {
         out.className = "small mt-2";
-        out.innerHTML = `New primary: <code>${j.elected_primary}</code>. <a href="${location.href}">Reload</a>`;
+        out.innerHTML = `Started <code>${node}</code>. Rejoined cluster. <a href="${location.href}">Reload</a>`;
       }
     } catch (e) {
       out.className = "small mt-2 text-danger";
       out.textContent = e;
     }
-    document.querySelectorAll(".kill-btn").forEach(x => x.disabled = false);
+    setNodeButtonsDisabled(false);
   });
 });
 
+// ── Firewall rules ───────────────────────────────────────────────────────────
+async function loadRules() {
+  const panel = document.getElementById("rules-panel");
+  panel.innerHTML = '<div class="text-muted small">Loading…</div>';
+  try {
+    const r = await fetch("/api/rules");
+    const j = await r.json();
+    if (j.error) {
+      panel.innerHTML = `<div class="text-danger small">${j.error}</div>`;
+      return;
+    }
+    let html = `<table class="table table-sm detail-table mb-0">
+      <thead><tr>
+        <th>#</th><th>Kind</th><th>Pattern</th><th>Action</th><th class="text-end">Hits</th>
+      </tr></thead><tbody>`;
+    for (const r of j.rules) {
+      const kindCls = r.kind === "DENY" ? "sev-high" : r.kind === "ROUTE" ? "sev-med" : "sev-low";
+      const action = r.error_msg
+        ? `<span class="text-danger small">${r.error_msg}</span>`
+        : r.destination_hostgroup !== null
+          ? `→ hg=${r.destination_hostgroup}`
+          : "—";
+      html += `<tr>
+        <td class="small text-muted">${r.rule_id}</td>
+        <td><span class="sev-pill ${kindCls}">${r.kind}</span></td>
+        <td class="font-mono small">${r.pattern || "—"}</td>
+        <td>${action}</td>
+        <td class="text-end font-mono">${r.hits.toLocaleString()}</td>
+      </tr>`;
+    }
+    html += "</tbody></table>";
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = `<div class="text-danger small">${e}</div>`;
+  }
+}
+loadRules();
+document.getElementById("rules-refresh").addEventListener("click", e => { e.preventDefault(); loadRules(); });
+
+// ── Stress test ──────────────────────────────────────────────────────────────
 document.querySelectorAll(".stress-btn").forEach(b => {
   b.addEventListener("click", async () => {
     const kind = b.dataset.stress;
@@ -162,7 +226,7 @@ document.querySelectorAll(".stress-btn").forEach(b => {
       const r = await fetch(`/api/stress/${kind}`, {method: "POST"});
       const j = await r.json();
       out.textContent = j.started
-        ? `${kind} running (${j.duration}). Check Grafana for impact.`
+        ? `${kind} running (${j.duration}). Watch Grafana → Phase 5 dashboard.`
         : `${kind} already in progress.`;
     } catch (e) {
       out.textContent = e;
@@ -170,46 +234,7 @@ document.querySelectorAll(".stress-btn").forEach(b => {
   });
 });
 
-document.getElementById("scan-btn").addEventListener("click", async () => {
-  const panel = document.getElementById("scan-result");
-  const loading = document.getElementById("scan-loading");
-  const content = document.getElementById("scan-content");
-  panel.classList.remove("d-none");
-  loading.classList.remove("d-none");
-  content.classList.add("d-none");
-  try {
-    const r = await fetch("/api/discovery/scan", {method: "POST"});
-    const j = await r.json();
-    loading.classList.add("d-none");
-    if (j.error) {
-      panel.innerHTML = `<div class="text-danger small">${j.error}</div>`;
-      return;
-    }
-    document.getElementById("scan-total").textContent = `${j.total} findings`;
-    const tbody = document.getElementById("scan-rows");
-    tbody.innerHTML = "";
-    for (const f of j.findings) {
-      const sev = (f.severity || "").toUpperCase();
-      const sevCls = sev === "HIGH" ? "sev-high" : sev === "MEDIUM" ? "sev-med" : "sev-low";
-      const verdict = (f.verdict || "").toUpperCase();
-      const verdictCls = verdict.includes("EXPOSED") ? "text-danger" : "text-success";
-      tbody.innerHTML += `
-        <tr>
-          <td>${f.table || ""}</td>
-          <td><code>${f.column || ""}</code></td>
-          <td>${f.pattern || ""}</td>
-          <td><span class="sev-pill ${sevCls}">${sev || "?"}</span></td>
-          <td class="${verdictCls} small">${verdict || "?"}</td>
-          <td>${f.count || 0}</td>
-        </tr>`;
-    }
-    content.classList.remove("d-none");
-  } catch (e) {
-    loading.classList.add("d-none");
-    panel.innerHTML = `<div class="text-danger small">${e}</div>`;
-  }
-});
-
+// ── Alerts polling ───────────────────────────────────────────────────────────
 async function refreshAlerts() {
   try {
     const r = await fetch("/api/alerts");

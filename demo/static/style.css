@@ -133,3 +133,47 @@ code, pre, .font-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 .sev-high { background: #fdecec; color: #a32525; }
 .sev-med  { background: #fff5e1; color: #946100; }
 .sev-low  { background: #eef2f7; color: #5b6470; }
+
+/* ── stat cards (PII discovery page) ──────────────────────────────────────── */
+.stat-card { border-radius: 0.4rem; }
+.stat-num {
+  font-size: 1.7rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #1a1d23;
+}
+.stat-label {
+  font-size: 0.74rem;
+  color: #8a909a;
+  margin-top: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── finding card ─────────────────────────────────────────────────────────── */
+.finding-card {
+  border: 1px solid #e3e6ea;
+  border-radius: 0.4rem;
+}
+.finding-loc {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: #f1f3f5;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+}
+.finding-grid {
+  width: 100%;
+  font-size: 0.82rem;
+}
+.finding-grid td:first-child {
+  width: 130px;
+  color: #8a909a;
+  vertical-align: top;
+  padding: 0.18rem 0.5rem 0.18rem 0;
+}
+.finding-grid td:last-child {
+  vertical-align: top;
+  padding: 0.18rem 0;
+}
