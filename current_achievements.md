@@ -270,14 +270,14 @@ Project có 6 doc trong root (không kể CLEANUP trong demo/):
 - [problem.md](problem.md) — 11 sự cố đã gặp + root cause + fix
 - [data_flow.md](data_flow.md) — 13 sequence diagram per role per scenario
 - [future_work.md](future_work.md) — limitation + production roadmap (~530 dòng)
-- [shining_point.md](shining_point.md) — file này
+- [current_achievements.md](current_achievements.md) — file này
 - [demo/CLEANUP.md](demo/CLEANUP.md) — cleanup procedure
 
 ### Vì sao đó không phải tầm thường
 Project học thường có 1 file README ngắn + maybe a slide deck. Project mình **doc theo concern** (design / sequence diagram / problem / roadmap / cleanup) — mỗi audience đọc đúng file mình cần:
 - Người chấm muốn nắm tổng quan → README.
 - Người chấm muốn check tư duy thiết kế → proposal.
-- Người chấm chất vấn "vì sao không X" → future_work + shining_point.
+- Người chấm chất vấn "vì sao không X" → future_work + current_achievements.
 - Người chấm muốn xác minh chi tiết → data_flow.
 - Engineer làm continue → problem + CLEANUP.
 
