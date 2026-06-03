@@ -1123,6 +1123,47 @@ def admin_kill_node_legacy(node):
     return r
 
 
+# ── Admin SQL playground (run as root via direct MySQL :3307, no proxy/Acra) ───
+
+@app.post("/api/admin/query")
+@require_role("admin")
+def admin_query():
+    """Run SQL as MySQL root via direct port 3307. No ProxySQL, no Acra.
+
+    Two demo points:
+      - Root sees everything (no RBAC blocks DBA) — but ssn/cc come back as
+        raw VARBINARY bytes, not plaintext, because Acra isn't in path to decrypt.
+      - DDL like DROP works (no DBF) — the point being defense-in-depth depends
+        on layering; bypass the proxy and you bypass the firewall. Encryption
+        at rest is what's actually protecting PII at this point.
+    """
+    sql = (request.get_json(silent=True) or {}).get("sql", "")
+    if not isinstance(sql, str) or not sql.strip():
+        return jsonify({"error": "empty SQL"}), 400
+    sql = sql.strip().rstrip(";")
+
+    rows, cols, error, affected = None, [], None, None
+    try:
+        conn = mysql.connector.connect(**DBA_DIRECT,
+                                       connection_timeout=5)
+        cur = conn.cursor()
+        cur.execute(sql)
+        if cur.description:
+            cols = [c[0] for c in cur.description]
+            rows = []
+            for r in cur.fetchall():
+                rows.append([to_text(v) for v in r])
+        else:
+            affected = cur.rowcount
+        cur.close(); conn.close()
+    except mysql.connector.Error as err:
+        error = f"({err.errno}, '{err.msg}')"
+    except Exception as err:
+        error = str(err)
+    return jsonify({"sql": sql, "columns": cols, "rows": rows,
+                    "affected": affected, "error": error})
+
+
 # ── ProxySQL rules visualization ────────────────────────────────────────────────
 
 @app.get("/api/rules")
