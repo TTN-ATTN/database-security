@@ -244,17 +244,43 @@ phase7_part2: env ## ⭐ Setup Phase 7 demo end-to-end (acra keys + chained + HA
 	  [ "$$i" = "60" ] && { echo " TIMEOUT"; exit 1; }; \
 	done
 	@echo ""
-	@echo "── 3/5 chained mode + classification (~1-2min) ──"
+	@echo "── 3/6 ensure schema + seed (idempotent) ──"
+	@HAS_FIRSTNAME=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='testdb' AND table_name='users' AND column_name='first_name';" 2>/dev/null); \
+	if [ "$$HAS_FIRSTNAME" != "1" ]; then \
+	  echo "  users table missing or wrong schema — applying schema.sql / masking.sql / rbac.sql / proxysql-users.sql / phase4_encryption_demo.sql"; \
+	  $(MAKE) -s schema; \
+	  docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/proxysql-users.sql; \
+	  docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/phase4_encryption_demo.sql; \
+	else \
+	  echo "  users table OK (has first_name column)"; \
+	  HAS_DBFUSER=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	    "SELECT COUNT(*) FROM mysql.user WHERE user='dbfuser';" 2>/dev/null); \
+	  if [ "$${HAS_DBFUSER:-0}" != "1" ]; then \
+	    echo "  dbfuser missing — applying proxysql-users.sql"; \
+	    docker exec -i dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" < mysql/proxysql-users.sql; \
+	  fi; \
+	fi
+	@COUNT=$$(docker exec dbsec-mysql mysql -uroot -p"$${MYSQL_ROOT_PASSWORD:-rootpass}" -N -e \
+	  "SELECT COUNT(*) FROM testdb.users;" 2>/dev/null); \
+	if [ "$${COUNT:-0}" -lt "100" ]; then \
+	  echo "  users count $${COUNT:-0} < 100 — seeding 1000 demo rows"; \
+	  python3 scripts/phase2_seed_all.py; \
+	else \
+	  echo "  users seeded ($${COUNT} rows)"; \
+	fi
+	@echo ""
+	@echo "── 4/6 chained mode + classification (~1-2min) ──"
 	@bash scripts/phase7_5_apply.sh
 	@echo ""
-	@echo "── 4/5 HA cluster bootstrap (~2-3min, ~1.5GB RAM) ──"
+	@echo "── 5/6 HA cluster bootstrap (~2-3min, ~1.5GB RAM) ──"
 	@if docker ps --format '{{.Names}}' | grep -qE '^(dbsec-mysql-[123]|dbsec-ha-router)$$'; then \
 	  echo "  HA cluster already running (skip bootstrap)"; \
 	else \
 	  bash scripts/phase7_ha_bootstrap.sh; \
 	fi
 	@echo ""
-	@echo "── 5/5 sanity check ──"
+	@echo "── 6/6 sanity check ──"
 	@python3 scripts/phase7_5_verify.py 2>&1 | tail -4
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════════"
