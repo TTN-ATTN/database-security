@@ -1123,6 +1123,86 @@ def admin_kill_node_legacy(node):
     return r
 
 
+# ── Support SQL playground (run as support via chain :6033) ─────────────────────
+
+@app.post("/api/support/query")
+@require_role("support")
+def support_query():
+    """Run SQL as MySQL `support` via ProxySQL :6033. Same firewall path as the
+    list page's search box, so SQLi tautology hits the DBF; raw SELECT FROM users
+    hits MySQL RBAC (1142)."""
+    sql = (request.get_json(silent=True) or {}).get("sql", "")
+    if not isinstance(sql, str) or not sql.strip():
+        return jsonify({"error": "empty SQL"}), 400
+    sql = sql.strip().rstrip(";")
+
+    rows, cols, error = None, [], None
+    try:
+        conn = pymysql.connect(**SUPPORT, connect_timeout=5, read_timeout=10)
+        cur = conn.cursor()
+        cur.execute(sql)
+        if cur.description:
+            cols = [c[0] for c in cur.description]
+            rows = [[to_text(v) for v in r] for r in cur.fetchall()]
+        cur.close(); conn.close()
+    except pymysql.MySQLError as err:
+        error = str(err).splitlines()[0]
+    except Exception as err:
+        error = str(err)
+    return jsonify({"sql": sql, "columns": cols, "rows": rows, "error": error})
+
+
+# ── HA pulse — prove writes keep working after kill ─────────────────────────────
+
+@app.post("/api/admin/ha/pulse")
+@require_role("admin")
+def admin_ha_pulse():
+    """Single 'heartbeat' through the HA router. INSERT a row to ha_pulse with
+    @@hostname (the actual backend node that served the write). Returns who
+    served it + elapsed ms. The UI polls this on a timer to build a continuous
+    timeline — when the user stops the primary, a few pulses fail until GR
+    elects a new one, then pulses resume on the new node.
+    """
+    if not _ha_router_up():
+        return jsonify({"success": False, "error": "HA router not running"}), 503
+    start = time.time()
+    try:
+        conn = pymysql.connect(
+            host=CHAIN_HOST, port=6450, user="dbfuser", password="dbfpass",
+            database=DB, ssl_disabled=True, autocommit=True,
+            connect_timeout=3, read_timeout=5)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ha_pulse (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                beat_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
+                server VARCHAR(64))
+        """)
+        cur.execute("INSERT INTO ha_pulse (server) VALUES (@@report_host)")
+        beat_id = cur.lastrowid
+        # SELECT FOR UPDATE forces the read to go to the writer (R/W split rule
+        # 1010 routes FOR UPDATE/FOR SHARE -> hostgroup 2). That way we surely
+        # see the row we just inserted on the same node.
+        cur.execute("SELECT server FROM ha_pulse WHERE id=%s FOR UPDATE",
+                    (beat_id,))
+        server = cur.fetchone()[0]
+        cur.close(); conn.close()
+        elapsed_ms = int((time.time() - start) * 1000)
+        return jsonify({
+            "success": True,
+            "node": server,
+            "beat_id": beat_id,
+            "elapsed_ms": elapsed_ms,
+        })
+    except Exception as err:
+        elapsed_ms = int((time.time() - start) * 1000)
+        return jsonify({
+            "success": False,
+            "error": str(err).splitlines()[0],
+            "elapsed_ms": elapsed_ms,
+        })
+
+
 # ── Admin SQL playground (run as root via direct MySQL :3307, no proxy/Acra) ───
 
 @app.post("/api/admin/query")

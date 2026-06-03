@@ -134,6 +134,28 @@ code, pre, .font-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 .sev-med  { background: #fff5e1; color: #946100; }
 .sev-low  { background: #eef2f7; color: #5b6470; }
 
+/* ── HA pulse timeline ────────────────────────────────────────────────────── */
+.pulse-timeline {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0.4rem 0.5rem;
+  background: #f6f7f9;
+  border-radius: 0.3rem;
+  min-height: 28px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.pulse-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.pulse-ok   { background: #2db867; }
+.pulse-fail { background: #d63a3a; }
+
 /* ── stat cards (PII discovery page) ──────────────────────────────────────── */
 .stat-card { border-radius: 0.4rem; }
 .stat-num {

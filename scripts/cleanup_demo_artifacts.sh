@@ -89,6 +89,7 @@ if [ "$DO_DEMO_DATA" = "1" ]; then
     # ha_demo table (from failover demo) + demo users id<=5 + rw-demo orders in cluster
     docker exec -i dbsec-mysql-1 mysql -uroot -p"$ROOTPW" testdb 2>/dev/null <<'SQL' || true
 DROP TABLE IF EXISTS ha_demo;
+DROP TABLE IF EXISTS ha_pulse;
 DELETE FROM orders WHERE product LIKE 'rw-demo-%';
 DELETE FROM users WHERE id BETWEEN 1 AND 5 AND first_name='Demo' AND last_name='User';
 SQL

@@ -99,6 +99,38 @@
       </div>
     </div>
 
+    <!-- HA pulse — prove writes survive failover -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">HA pulse</h2>
+          <span class="small text-muted">INSERT through ha-router :6450 every 2s</span>
+        </div>
+        <p class="small text-muted mb-2">
+          Bật <strong>Auto-pulse</strong> → mỗi 2s gửi 1 write qua ha-router, ghi node nào nhận write.
+          Bấm <strong>Stop</strong> primary ở panel trên → các pulse fail ~5-8s rồi resume trên primary mới.
+        </p>
+        <div class="d-flex gap-2 align-items-center mb-2">
+          <button id="pulse-once" class="btn btn-sm btn-outline-secondary">Pulse once</button>
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="pulse-auto">
+            <label class="form-check-label small" for="pulse-auto">Auto-pulse (2s)</label>
+          </div>
+          <span class="ms-auto small">
+            <span class="text-success" id="pulse-ok-count">0</span> ok ·
+            <span class="text-danger" id="pulse-fail-count">0</span> fail
+          </span>
+        </div>
+        <div class="pulse-timeline mb-2" id="pulse-timeline"></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 detail-table">
+            <thead><tr><th>time</th><th>result</th><th>node</th><th class="text-end">ms</th></tr></thead>
+            <tbody id="pulse-history"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- Database firewall rules -->
     <div class="card mb-3">
       <div class="card-body">
@@ -290,6 +322,75 @@ async function refreshAlerts() {
 }
 refreshAlerts();
 setInterval(refreshAlerts, 5000);
+
+// ── HA pulse — write+verify through ha-router every 2s ──────────────────────
+let pulseOk = 0, pulseFail = 0;
+let pulseAutoTimer = null;
+const PULSE_TIMELINE_LEN = 30;
+const pulseHistory = [];   // newest first
+
+function pulseTimelineRender() {
+  const el = document.getElementById("pulse-timeline");
+  // build dots oldest -> newest, latest at right
+  const view = pulseHistory.slice(0, PULSE_TIMELINE_LEN).reverse();
+  el.innerHTML = view.map(p =>
+    `<span class="pulse-dot pulse-${p.success ? 'ok' : 'fail'}" title="${p.title}"></span>`
+  ).join("");
+}
+
+function pulseHistoryRender() {
+  const tbody = document.getElementById("pulse-history");
+  tbody.innerHTML = pulseHistory.slice(0, 12).map(p => `
+    <tr>
+      <td class="small text-muted">${p.timestamp}</td>
+      <td>
+        <span class="status-dot ${p.success ? 'dot-green' : 'dot-red'}"></span>
+        <span class="small">${p.success ? 'ok' : 'fail'}</span>
+      </td>
+      <td><code class="small">${p.node || '—'}</code></td>
+      <td class="text-end small font-mono">${p.elapsed_ms}</td>
+    </tr>
+  `).join("");
+}
+
+async function pulseSend() {
+  const t0 = new Date();
+  let entry;
+  try {
+    const r = await fetch("/api/admin/ha/pulse", {method: "POST"});
+    const j = await r.json();
+    entry = {
+      timestamp: t0.toLocaleTimeString(),
+      success: j.success,
+      node: j.node,
+      elapsed_ms: j.elapsed_ms,
+      title: j.success ? `${j.node} @ ${t0.toLocaleTimeString()}` : (j.error || "fail"),
+    };
+    if (j.success) pulseOk++;
+    else pulseFail++;
+  } catch (e) {
+    entry = {timestamp: t0.toLocaleTimeString(), success: false,
+             node: null, elapsed_ms: 0, title: e.toString()};
+    pulseFail++;
+  }
+  pulseHistory.unshift(entry);
+  if (pulseHistory.length > 60) pulseHistory.pop();
+  document.getElementById("pulse-ok-count").textContent = pulseOk;
+  document.getElementById("pulse-fail-count").textContent = pulseFail;
+  pulseTimelineRender();
+  pulseHistoryRender();
+}
+
+document.getElementById("pulse-once").addEventListener("click", pulseSend);
+document.getElementById("pulse-auto").addEventListener("change", e => {
+  if (e.target.checked) {
+    pulseSend();
+    pulseAutoTimer = setInterval(pulseSend, 2000);
+  } else {
+    if (pulseAutoTimer) clearInterval(pulseAutoTimer);
+    pulseAutoTimer = null;
+  }
+});
 
 // ── DBA SQL playground ───────────────────────────────────────────────────────
 document.querySelectorAll(".admin-payload").forEach(a => {
