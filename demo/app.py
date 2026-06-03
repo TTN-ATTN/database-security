@@ -30,7 +30,12 @@ import subprocess
 import threading
 import time
 
-import requests
+try:
+    import requests
+except ImportError:
+    # `requests` is only used by /api/alerts (Prometheus proxy). Make it optional so
+    # the demo still boots if someone forgets `pip install -r requirements.txt`.
+    requests = None
 from dotenv import load_dotenv
 from flask import (
     Flask, Response, abort, jsonify, redirect, render_template, request,
@@ -536,6 +541,10 @@ def monitoring_urls():
 @app.get("/api/alerts")
 def alerts():
     """Proxy Prometheus alerts so the browser doesn't hit CORS."""
+    if requests is None:
+        return jsonify({"error": "requests not installed — run `pip install requests`",
+                        "firing_count": 0, "pending_count": 0,
+                        "firing": [], "pending": []}), 503
     try:
         r = requests.get(f"{PROM_URL}/api/v1/alerts", timeout=2)
         data = r.json().get("data", {}).get("alerts", [])
