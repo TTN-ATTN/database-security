@@ -303,6 +303,169 @@ sequenceDiagram
 
 ---
 
+## 4. SQL playground — 3 role, mỗi role chạy SQL từ trang riêng
+
+Mỗi role có 1 panel "SQL" để chạy câu query tùy ý. Khác nhau **MySQL user + endpoint**, giống nhau ở chỗ trả về kết quả/lỗi để xem defense fire.
+
+### 4a. Customer SQL playground
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Alice (session.id=1)
+    participant FL as Flask :5000
+    participant PR as ProxySQL :6033
+    participant AC as Acra :9393
+    participant MY as MySQL :3306
+
+    U->>FL: POST /api/customer/query<br/>{sql: "CALL get_my_profile(2, '<token id=1>')"}
+    Note over FL: Connect as self_service (cấu hình cứng)<br/>SQL từ user, không sanitize
+    FL->>PR: Forward SQL (any)
+    Note over PR: Match query rules
+    alt SQL = DROP / TRUNCATE / OR '1'='1'
+        PR-->>FL: ERROR 1148 (DBF)
+    else SQL = SELECT raw users
+        PR->>AC: Forward
+        AC->>MY: Forward
+        MY-->>AC: ERROR 1142 (RBAC, self_service không có grant)
+    else SQL = CALL get_my_profile (đúng cú pháp)
+        PR->>AC: Forward
+        AC->>MY: Forward
+        alt token đúng (id=session.id)
+            MY-->>AC: Row(ssn=ciphertext)
+            AC-->>PR: Row(ssn=plaintext, Acra decrypt)
+            PR-->>FL: Row
+        else token sai
+            MY-->>AC: ERROR 1644 SIGNAL 45000
+            AC-->>PR: Error
+            PR-->>FL: Error
+        end
+    end
+    FL-->>U: {columns, rows, error}
+```
+
+→ Đây là **playground để khán giả tự thử attacker** ở client side. 5 quick attack link prefill các payload có ý đồ → bấm Run thấy đúng 1644/1148/1142 fire.
+
+### 4b. Support SQL playground
+
+Cùng cấu trúc, chỉ khác `self_service` → `support` ở Flask conn config:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Carol
+    participant FL as Flask :5000
+    participant PR as ProxySQL :6033
+    participant AC as Acra :9393
+    participant MY as MySQL :3306
+
+    C->>FL: POST /api/support/query<br/>{sql: "SELECT ssn FROM users LIMIT 3"}
+    FL->>PR: Forward as user=support
+    Note over PR: Không match deny rule (SELECT thường)
+    PR->>AC: Forward
+    AC->>MY: Forward
+    Note over MY: support có SELECT trên users_masked,<br/>KHÔNG có grant trên users raw
+    MY-->>AC: ERROR 1142
+    AC-->>PR: Error
+    PR-->>FL: Error
+    FL-->>C: {error: "(1142, ...)"}
+```
+
+→ Khác customer: support không gọi stored proc → không có token defense → defense rơi vào RBAC + DBF.
+
+### 4c. Admin SQL playground (DBA direct)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as Dave
+    participant FL as Flask :5000
+    participant MY as MySQL :3307 (host port)
+
+    D->>FL: POST /api/admin/query<br/>{sql: "..."}
+    Note over FL: Connect via mysql.connector<br/>port=3307, user=root<br/>(no ProxySQL, no Acra)
+    FL->>MY: Forward as user=root
+    alt SQL = SELECT ssn FROM users
+        MY-->>FL: Row(ssn=raw bytes 161B)
+        FL-->>D: ssn = "<binary 161 bytes; head=0x252525a1…>"
+    else SQL = DROP TABLE
+        Note over MY: Không có DBF ở đường này
+        MY-->>FL: OK 0 rows affected
+        FL-->>D: Success
+    else SQL = SHOW GRANTS / SHOW PROCESSLIST
+        MY-->>FL: Rows
+        FL-->>D: {rows: [...]}
+    end
+```
+
+→ **Đây là vai trò "thí nghiệm"**: chứng minh bypass ProxySQL = bypass firewall (DROP chạy được), và encryption at rest là defense còn lại (ssn raw vẫn ciphertext).
+
+---
+
+## 5. HA pulse — chứng minh writes survive failover
+
+Đây không phải data query của user, mà là **ops visualization** ở admin panel.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant FL as Flask :5000 (admin page)
+    participant HA as ha-router :6450
+    participant N1 as mysql-1
+    participant N2 as mysql-2
+    participant N3 as mysql-3
+
+    Note over FL: JS auto-pulse mỗi 2s
+    loop every 2s
+        FL->>HA: POST /api/admin/ha/pulse (Flask)
+        FL->>FL: Open new pymysql to :6450
+        FL->>HA: INSERT INTO ha_pulse (server) VALUES (@@report_host)
+        HA->>N1: Forward (N1 hiện là primary, hg=2)
+        N1->>N1: Execute INSERT, replicate to N2/N3
+        N1-->>HA: OK
+        HA-->>FL: OK
+        FL->>HA: SELECT server FROM ha_pulse WHERE id=last_id FOR UPDATE
+        Note over HA: FOR UPDATE → rule 1010 → force writer
+        HA->>N1: Forward
+        N1-->>HA: "dbsec-mysql-1"
+        HA-->>FL: Row
+        FL-->>FL: Render dot xanh, "node: mysql-1"
+    end
+
+    Note over N1: User bấm Stop mysql-1 ở UI
+    FL->>N1: docker stop (via /admin/stop)
+    N1->>N2: leaving group msg
+    N1->>N3: leaving group msg
+    N2->>N2: GR elect: tôi là primary mới
+    N2->>N2: read_only = OFF
+    Note over HA: ProxySQL monitor_read_only (1.5s)<br/>thấy N2 đã read_only=OFF<br/>→ move N2 vào hg=2
+
+    loop in transition 5-8s
+        FL->>HA: pulse
+        HA--xFL: connection error (N1 down, N2 chưa được proxy biết là primary)
+        FL-->>FL: Render dot đỏ, "fail"
+    end
+
+    Note over HA: Stable: N2 trong hg=2
+    loop after recovery
+        FL->>HA: pulse
+        HA->>N2: Forward
+        N2-->>HA: OK
+        HA-->>FL: {success, node: "mysql-2"}
+        FL-->>FL: Render dot xanh, "node: mysql-2"
+    end
+```
+
+→ Timeline có dạng:
+```
+🟩🟩🟩🟩🟩🟩🟩🟥🟥🟥🟥🟩🟩🟩🟩🟩🟩
+                ↑ kill mysql-1   ↑ new primary mysql-2 took over
+```
+
+Visual proof: **writes không mất** sau failover, app chỉ thấy ~5-8s gián đoạn, sau đó tiếp tục với node khác. Endpoint app dùng (`:6450`) không đổi.
+
+---
+
 ## Tổng kết — 3 role, 3 đường
 
 | | **Customer** | **Support** | **Admin** |

@@ -14,7 +14,7 @@ make demo-clean-all
 Trong ~60s sẽ:
 - Stop Flask
 - Xóa `__pycache__`
-- Xóa demo rows trong DB (orders `rw-demo-*`, secure_cards test, ha_demo table, demo users)
+- Xóa demo rows trong DB (orders `rw-demo-*`, secure_cards test, ha_demo + ha_pulse tables, demo users)
 - Truncate `logs/mysql/general.log` (~16MB) + `audit_report.json`
 - Tear down HA cluster (3 MySQL node + ha-router) → **free ~1.5GB RAM**
 - Tear down base stack (MySQL + ProxySQL + Acra + Grafana + Prometheus + Alertmanager)
@@ -67,6 +67,8 @@ make ha-down
 docker exec -i dbsec-mysql mysql -uroot -prootpass testdb <<EOF
 DELETE FROM secure_cards WHERE holder LIKE 'phase%-demo';
 DELETE FROM orders WHERE product LIKE 'rw-demo-%' OR product LIKE 'phase5-load-%';
+DROP TABLE IF EXISTS ha_demo;
+DROP TABLE IF EXISTS ha_pulse;
 EOF
 ```
 

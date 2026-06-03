@@ -386,6 +386,33 @@ Giới hạn / Threat model:
 
 - DBA + Acra-admin nếu cùng 1 người → vẫn đọc được PII. Trong môi trường đồ án, đây là giả định "tin DBA"; production cần tách thực sự (Acra key tách HSM, audit luôn) — ghi rõ ở phạm vi.
 - `fraud` đọc raw nhưng mọi query của họ được log Phase 3 (general.log + ProxySQL digest) → ai đọc PII là verifiable.
+- Toàn bộ giới hạn còn lại + đường mở rộng production-grade ghi tách ra [future_work.md](future_work.md).
+
+### 6.7c Phase 7 part 2 - Web demo UI + ops visualization
+
+Toàn bộ tính năng Phase 1-7.5 được gom vào 1 web demo (Flask + Bootstrap) để người chấm bấm là thấy ngay, không cần đọc terminal output. Tên app `atmnc`, 4 user login (Alice/Bob = customer, Carol = support, Dave = admin).
+
+**Đường dẫn vật lý 1 lệnh**:
+
+```bash
+make demo-up   # idempotent: acra-keys → base stack → schema+seed → classify → HA cluster → Flask
+```
+
+**Mỗi role có UI riêng**:
+
+- **Customer page** (`/profile`): profile bound theo session.id. Switch `?id=` bar để demo IDOR — token bound theo session, đổi URL id → stored proc reject. Có SQL playground chạy as `self_service` với 5 quick attack link (IDOR / SQL injection / DROP / TRUNCATE / SELECT raw) → fire 1644/1148/1148/1148/1142.
+- **Support page** (`/support`): customer list masked + search box vulnerable concat. Detail page có auto-attempt SELECT raw → 1142. SQL playground as `support` với 5 quick attack link.
+- **Admin page** (`/admin`): 6 panel ops dashboard:
+  1. **Storage sample** — visual ciphertext at rest (raw bytes 161B + hex prefix `252525A1…`).
+  2. **SQL playground** as root direct :3307 — bypass cả ProxySQL lẫn Acra → demo "bypass proxy = bypass firewall" + encryption-at-rest là defense còn lại.
+  3. **Database cluster** — 3 node card combine docker state + ProxySQL runtime; Stop/Start button thật (không phải auto-restart).
+  4. **HA pulse** — auto INSERT mỗi 2s qua ha-router, timeline xanh/đỏ + history table → bằng chứng trực quan writes survive failover (kill primary → pulse đỏ 5-8s → resume xanh ở node khác).
+  5. **Database firewall** — ProxySQL rules + hit counters live.
+  6. **Load testing** — 3 stress button kích Phase 5 alerts qua mysqld_exporter → Prometheus → Alertmanager.
+- **Discovery page** (`/admin/discovery`): Phase 6 scanner kết quả render thành 4 stat card + finding list (table.column · severity · verdict · exposed_to · path · sample matches · remediation).
+- **Right sidebar** mọi trang: live MySQL log tail qua SSE → mỗi click sinh dòng log → chứng minh stack thật, không mock.
+
+Mapping tính năng đồ án ↔ vị trí trên UI ghi đầy đủ ở [README.md](README.md) section "Web demo UI".
 
 ### 6.8 Phase 8 - Advanced Kubernetes / Cloud Extension
 

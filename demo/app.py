@@ -1,7 +1,7 @@
 """Database Security demo - single-page web UI.
 
 Endpoints:
-  GET   /                          -> render index.html
+  GET   /                          -> render login.html (if not logged in)
   GET   /api/role/<role>           -> run "view Customer #1 profile" as that role
                                       (roles: customer, support, fraud, dba)
   GET   /api/attack/<attack>       -> run an attack scenario; report which layer blocked

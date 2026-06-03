@@ -12,6 +12,9 @@ Trạng thái hiện tại của source code:
 - **Phase 6 - Sensitive Data Discovery**: hoàn thành (schema scan theo tên cột + data pattern scan email/phone/card/SSN, phát hiện PII rò rỉ trong free-text, xuất JSON/CSV kèm remediation).
 - **Phase 7 - Chained path + High Availability**: hoàn thành (chained `ProxySQL→Acra→MySQL` opt-in giữ fallback; HA 3-node MySQL Group Replication + ProxySQL GR-router với failover **+ R/W split** writes→primary, reads→secondaries; full integrated path + regression Phase 1-6).
 - **Phase 7.5 - Data Classification (4-tier role model)**: hoàn thành (Tier 1 Encrypt-at-Acra cho `ssn`/`credit_card`; Tier 2 Mask-at-MySQL cho `email`/`phone`/`address`; Tier 3 Clear cho `id`/tên/timestamp). 4 MySQL identity với 4 quyền khác nhau: `support` (chỉ thấy masked view, bị deny raw `users`), `fraud` (need-to-know, đọc raw + Acra decrypt), `self_service` (khách đọc **đúng row của mình** qua stored procedure có token check, chống IDOR), DBA direct chỉ thấy ciphertext → separation of duties: DBA giữ DB nhưng không giữ key.
+- **Phase 7 part 2 - Web demo UI + ops visualization**: hoàn thành. Flask app `atmnc` 4-user login flow (Alice/Bob/Carol/Dave); SQL playground 3 role (customer/support/admin) — mỗi role chạy ngay từ trang của mình để fire defenses; HA visualizer 2 cấp (cluster panel với Stop/Start + HA pulse panel write-mỗi-2s chứng minh failover); ProxySQL rules panel live hit-count; Phase 6 discovery có page riêng với 4 stat card + finding list. **1 lệnh `make demo-up` bootstrap toàn bộ** (acra-keys → base stack → schema+seed → classify → HA cluster). Đầy đủ cleanup `make demo-clean-all`.
+
+📂 **Tài liệu kèm**: [proposal.md](proposal.md) (thiết kế gốc) · [data_flow.md](data_flow.md) (đường đi query per-role) · [problem.md](problem.md) (sự cố đã gặp) · [future_work.md](future_work.md) (limitation + lộ trình production-readiness) · [demo/CLEANUP.md](demo/CLEANUP.md) (sau demo).
 
 Phase 1 cung cấp baseline chạy bằng Docker Compose:
 
@@ -394,54 +397,71 @@ make full-verify     # chứng minh cả 4 lớp cùng hoạt động trên 1 ch
 make regression      # revert default mode + chạy lại toàn bộ check Phase 1-6
 ```
 
-## Web demo UI — Login flow theo role
+## Web demo UI — atmnc
 
-Multi-page Flask app mô phỏng web thật: 4 user account, mỗi role có UI riêng + đầy đủ tính năng phòng thủ được thể hiện trong context "real app".
+Multi-page Flask app mô phỏng SaaS thật: brand `atmnc`, 4 user account, mỗi role có trang riêng. Mọi tính năng phòng thủ của project được thể hiện qua hành vi trang chứ không phải button "run demo".
 
 ### Setup 1 lệnh
 
 ```bash
 pip install -r requirements.txt   # lần đầu
-make demo-up                      # bootstrap everything + start Flask
+make demo-up                      # bootstrap mọi thứ + Flask
 ```
 
-`make demo-up` idempotent — lần đầu (~3-5 phút) sẽ bring up base stack + chained mode + HA cluster + encrypt 1000 row + Flask. Lần sau (~10s) chỉ check + start Flask.
+`make demo-up` idempotent. Cold start (~3-5 phút) = base stack + chained mode + classify + HA cluster + encrypt 1000 row + Flask. Warm restart (~10s) = check + start Flask. Stop bằng Ctrl+C. Dọn sạch: `make demo-clean-all` (xem [demo/CLEANUP.md](demo/CLEANUP.md)).
 
-Stop bằng Ctrl+C. Dọn sạch sau demo: `make demo-clean-all`.
+Mở browser: **http://localhost:5000**
 
-### 4 user (click vào card để login)
+### 4 user account
 
-| User | Role | Demo |
+| User | Role | Endpoint dùng | Trang chính |
+|---|---|---|---|
+| **Alice** (`alice`) | Customer #1 | ProxySQL :6033 — user `self_service` | `/profile` |
+| **Bob** (`bob`) | Customer #2 | ProxySQL :6033 — user `self_service` | `/profile` |
+| **Carol** (`carol`) | Support | ProxySQL :6033 — user `support` | `/support` |
+| **Dave** (`dave`) | Admin / DBA | MySQL :3307 direct (root) + ha-router :6452 admin | `/admin` |
+
+### Mỗi trang có những gì
+
+**Customer (`/profile`)**
+- Profile data của session-bound id (Alice = id=1, Bob = id=2). Acra decrypt ssn/cc trên đường về.
+- Switch `?id=` bar → thử IDOR: token bound to session.id, đổi URL id → token mismatch → 1644 từ procedure → 403 page.
+- **SQL playground** — chạy SQL tùy ý as `self_service` qua chain. 5 quick attack link: IDOR / SQL injection / DROP / TRUNCATE / SELECT raw → thấy 1644 / 1148 / 1148 / 1148 / 1142 fire trực tiếp.
+
+**Support (`/support`)**
+- List khách (masked email/phone). Search box: concat thẳng vào WHERE → SQL injection tautology bị DBF chặn (1148).
+- Detail `/support/customer/<id>`: masked view, auto-attempt SELECT raw → 1142 denied (RBAC).
+- **SQL playground** — chạy SQL as `support` qua chain. Quick links: SELECT raw users (1142) / SQL injection (1148) / DROP (1148) / TRUNCATE (1148) / SHOW GRANTS.
+
+**Admin (`/admin`)** — 6 panel
+1. **Storage sample** — hardcoded query qua MySQL :3307 direct, hiển thị ssn/cc = AcraStruct ciphertext bytes.
+2. **SQL playground (DBA)** — chạy SQL as root qua :3307. Bypass cả ProxySQL DBF lẫn Acra. DROP chạy được (no firewall ở đây) → demo defense-in-depth dựa vào layering: bypass proxy = bypass firewall → encryption-at-rest là phòng thủ còn lại.
+3. **Database cluster** — 3 node card (status từ docker inspect + ProxySQL runtime view kết hợp), Stop/Start button đổi theo state thật. Stop primary → ghi nhận primary mới được elect → node card chuyển STOPPED đến khi bấm Start.
+4. **HA pulse** — auto-INSERT mỗi 2s qua ha-router :6450, lưu node nào nhận write. Timeline 30 dot xanh/đỏ + history 12 row. Bấm Stop primary ở panel trên → pulse đỏ 5-8s → resume xanh ở node khác → **bằng chứng trực quan writes survive failover**.
+5. **Database firewall** — bảng ProxySQL rules + cột `hits` live. Trigger SQLi ở support page → quay lại admin refresh → hits +1.
+6. **Load testing** — 3 nút (slow query 90s / connection burst / mixed workload) → mở Grafana xem dashboard react + Alertmanager xem alert fire.
+
+Plus link **"Open scan →"** mở trang riêng [/admin/discovery](#) — 4 stat card (total / HIGH / EXPOSED / matches) + finding list với pattern / verdict / exposure_path / sample matches / remediation.
+
+### Sidebar phải (mọi trang)
+
+- **Query log** — Server-Sent Events tail `logs/mysql/general.log` real-time. Mỗi action trên UI sinh dòng log → chứng minh stack thật, không phải mock.
+- **Alerts** (chỉ admin) — poll Prometheus `/api/v1/alerts` mỗi 5s, hiển thị firing/pending. Bấm slow query → đợi 60s → alert chuyển pending → firing live.
+
+### Map tính năng đồ án → demo trên UI
+
+| Phase / tính năng | Vị trí trên UI | Cách nhìn ra |
 |---|---|---|
-| **Alice** (`alice`) | Customer #1 | Trang `/profile` đọc data của mình; thử URL `?id=2` (IDOR) → DB từ chối |
-| **Bob** (`bob`) | Customer #2 | Như Alice; cả 2 customer chia sẻ cùng pattern |
-| **Carol** (`carol`) | Support | List khách (masked); search box (thử SQLi → ProxySQL chặn); detail page có "try raw" → 1142 denied |
-| **Dave** (`dave`) | Admin/DBA | 4-panel dashboard: (A) raw ciphertext, (B) HA cluster + 💥 kill button mỗi node, (C) Phase 5 stress, (D) Phase 6 discovery |
-
-Plus: **right sidebar — live MySQL log tail** (SSE) chạy liên tục → mỗi click sinh ra dòng log mới → chứng minh "real-time, không phải web tĩnh".
-
-### Tính năng demo mapping
-
-| Tính năng đồ án | Demo ở đâu trong UI |
-|---|---|
-| ProxySQL DBF (Phase 4) | Search "OR '1'='1" trang Carol → DBF block (1148) |
-| Acra encryption (Phase 4/7.5) | Alice profile thấy plaintext; Dave panel A thấy ciphertext |
-| RBAC + view masking (Phase 2/7.5) | Carol detail page: masked view + raw access denied (1142) |
-| Stored proc IDOR defense (Phase 7.5 self-service) | Alice `?id=2` → SIGNAL 45000 |
-| Phase 3 audit pipeline | Right sidebar live log = query attribution per-user real-time |
-| Phase 5 perf monitor + alerts | Dave panel C: 3 stress button → mở Grafana xem dashboard + alerts |
-| Phase 6 discovery | Dave panel D: scan → table findings (PII rò rỉ trong activity_logs.notes) |
-| Phase 7 HA + failover | Dave panel B: 💥 kill node → cluster bầu primary mới, panel auto-update |
-
-### Cleanup sau demo
-
-Xem chi tiết: [demo/CLEANUP.md](demo/CLEANUP.md)
-
-Tóm tắt:
-```bash
-# Ctrl+C terminal Flask, rồi:
-make demo-clean-all   # tear down HA + base stack (volumes giữ, keystore giữ)
-```
+| Phase 2 — RBAC + view masking | Support detail, Customer SQL "SELECT raw" | Lỗi 1142 + masked output |
+| Phase 3 — audit pipeline | Right sidebar Query log | Mỗi click sinh dòng log |
+| Phase 4 — ProxySQL DBF | Carol search "OR '1'='1", admin Database firewall panel | 1148 + hits counter |
+| Phase 4/7.5 — Acra encryption | Customer (plaintext) vs Admin Storage sample (ciphertext bytes) | Cùng row, 2 view khác |
+| Phase 5 — perf + alerts | Admin Load testing → Grafana + Alertmanager | Dashboard react + alert fire |
+| Phase 6 — discovery | `/admin/discovery` page | Stat cards + finding list |
+| Phase 7 — HA + failover | Admin HA pulse | Pulse xanh đỏ qua kill cycle |
+| Phase 7 — R/W split | Admin Database firewall panel | Rules 1010/1020/1030 với hits |
+| Phase 7.5 — IDOR defense | Customer SQL playground "IDOR" link | 1644 token mismatch |
+| Phase 7.5 — 4-role classification | 4 user account, mỗi role thấy data khác | Switch user → render khác |
 
 ## Chạy Phase 7.5 - Data Classification (3-tier)
 
