@@ -11,14 +11,15 @@ Sau khi demo xong, làm theo các bước dưới để free tài nguyên (RAM, 
 make demo-clean-all
 ```
 
-Trong ~30s sẽ:
+Trong ~60s sẽ:
 - Stop Flask
 - Xóa `__pycache__`
 - Xóa demo rows trong DB (orders `rw-demo-*`, secure_cards test, ha_demo table, demo users)
 - Truncate `logs/mysql/general.log` (~16MB) + `audit_report.json`
 - Tear down HA cluster (3 MySQL node + ha-router) → **free ~1.5GB RAM**
+- Tear down base stack (MySQL + ProxySQL + Acra + Grafana + Prometheus + Alertmanager)
 
-Base stack (MySQL chính + ProxySQL + Grafana + Prometheus) **vẫn chạy**. Acra keystore + `.env` **vẫn giữ** → lần sau `make demo-up` lại được ngay (không phải re-encrypt 1000 row).
+Volumes (`mysql_data`, `acra_keys`, `prometheus_data`, `grafana_data`) **vẫn giữ** → lần sau `make demo-up` bootstrap nhanh (không phải re-encrypt 1000 row, Acra keystore còn nguyên).
 
 ---
 
@@ -29,8 +30,10 @@ Base stack (MySQL chính + ProxySQL + Grafana + Prometheus) **vẫn chạy**. Ac
 | Chỉ xóa pycache + stop Flask (an toàn nhất) | `bash scripts/cleanup_demo_artifacts.sh` |
 | Trên + xóa demo rows trong DB | `make demo-clean` |
 | Trên + truncate `logs/mysql/` | `bash scripts/cleanup_demo_artifacts.sh --logs` |
-| Trên + tear down HA cluster | `make demo-clean-all` |
-| Nuclear: tear down **toàn bộ stack + xóa volume** (sẽ mất encrypted ssn/cc) | `make clean-volumes` |
+| Trên + tear down HA cluster | `bash scripts/cleanup_demo_artifacts.sh --ha` |
+| Trên + tear down base stack (volumes giữ) | `bash scripts/cleanup_demo_artifacts.sh --base` |
+| **Tất cả ở trên** | `make demo-clean-all` |
+| Nuclear: tear down **toàn bộ stack + xóa volume** (sẽ mất encrypted ssn/cc + keystore) | `make clean-volumes` |
 
 Xem `bash scripts/cleanup_demo_artifacts.sh --help` để biết flag chi tiết.
 
@@ -96,12 +99,12 @@ make clean-volumes       # ⚠️ xóa volume → mất encrypted data
 | Demo rows trong DB | ❌ xóa | ❌ xóa | ❌ (volume xóa hết) |
 | `logs/mysql/general.log` | ✓ giữ | ❌ truncate | ❌ |
 | HA cluster | ✓ giữ | ❌ tear down | ❌ |
-| Base stack (MySQL, ProxySQL, Acra) | ✓ chạy | ✓ chạy | ❌ down |
-| Encrypted `users.ssn/cc` | ✓ giữ | ✓ giữ | ❌ **mất** |
-| Acra keystore (`acra_keys` volume) | ✓ giữ | ✓ giữ | ❌ **mất** (phải `make acra-keys` lại) |
+| Base stack (MySQL, ProxySQL, Acra, Prom, Grafana) | ✓ chạy | ❌ down | ❌ down |
+| Encrypted `users.ssn/cc` (mysql_data volume) | ✓ giữ | ✓ giữ | ❌ **mất** |
+| Acra keystore (`acra_keys` volume) | ✓ giữ | ✓ giữ | ❌ **mất** |
 | `.env` (chứa ACRA_MASTER_KEY) | ✓ giữ | ✓ giữ | ✓ giữ |
 
-→ **Quy tắc**: `demo-clean-all` an toàn cho lần demo tiếp theo (chỉ cần `make demo-up` lại). `clean-volumes` thì phải chạy lại `make phase7_part2` từ đầu (5-7 phút).
+→ **Quy tắc**: sau `make demo-clean-all`, lần sau `make demo-up` tự bootstrap lại (~3-5 phút từ cold). Sau `make clean-volumes` thì cũng `make demo-up` lo được nhưng tốn thêm thời gian re-encrypt 1000 row.
 
 ---
 

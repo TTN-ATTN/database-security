@@ -402,11 +402,12 @@ Multi-page Flask app mô phỏng web thật: 4 user account, mỗi role có UI r
 
 ```bash
 pip install -r requirements.txt   # lần đầu
-make phase7_part2                 # ⭐ acra-keys + base + chained + classify + HA bootstrap
-make demo-up                      # http://127.0.0.1:5000
+make demo-up                      # bootstrap everything + start Flask
 ```
 
-`make phase7_part2` idempotent — re-run sẽ skip bước đã xong, chỉ làm bước còn thiếu.
+`make demo-up` idempotent — lần đầu (~3-5 phút) sẽ bring up base stack + chained mode + HA cluster + encrypt 1000 row + Flask. Lần sau (~10s) chỉ check + start Flask.
+
+Stop bằng Ctrl+C. Dọn sạch sau demo: `make demo-clean-all`.
 
 ### 4 user (click vào card để login)
 
@@ -439,7 +440,7 @@ Xem chi tiết: [demo/CLEANUP.md](demo/CLEANUP.md)
 Tóm tắt:
 ```bash
 # Ctrl+C terminal Flask, rồi:
-make demo-clean-all   # free ~1.5GB RAM (tear down HA), giữ base + keystore
+make demo-clean-all   # tear down HA + base stack (volumes giữ, keystore giữ)
 ```
 
 ## Chạy Phase 7.5 - Data Classification (3-tier)

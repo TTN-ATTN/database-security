@@ -208,13 +208,17 @@ self-service-demo: ## Phase 7: customer reads own raw PII via stored-procedure g
 
 # ---------- web demo UI ----------
 
-demo-up: ## Launch the web demo UI (Flask) at http://127.0.0.1:5000
+demo-up: phase7_part2 ## Bootstrap everything (idempotent) + launch Flask at http://127.0.0.1:5000
+	@echo ""
+	@echo "Starting Flask demo. Open http://127.0.0.1:5000 in your browser."
+	@echo "Press Ctrl+C to stop."
+	@echo ""
 	python3 demo/app.py
 
 demo-clean: ## Safe cleanup: kill Flask + remove __pycache__ + truncate demo DB rows
 	bash scripts/cleanup_demo_artifacts.sh --demo-data
 
-demo-clean-all: ## Full cleanup: above + truncate logs + tear down HA cluster (~1.5GB freed)
+demo-clean-all: ## Full cleanup: stop Flask, drop demo data, truncate logs, tear down HA + base stack (volumes preserved)
 	bash scripts/cleanup_demo_artifacts.sh --all
 
 # ---------- phase 7 part 2: ONE-SHOT DEMO SETUP ----------

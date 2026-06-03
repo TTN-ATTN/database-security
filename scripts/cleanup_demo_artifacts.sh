@@ -13,7 +13,9 @@
 #                     + HA cluster's ha_demo table + self-seeded demo users (id<=5 in HA)
 #   --logs          : also truncate logs/mysql (general.log, slow.log) - the 40+MB drag
 #   --ha            : also tear down the HA cluster + ha-router (frees ~1.5GB RAM)
-#   --all           : everything above
+#   --base          : also tear down the base stack (mysql/proxysql/acra/prometheus/
+#                     grafana/alertmanager). Volumes preserved -> next bootstrap is fast.
+#   --all           : everything above (HA + base + data + logs)
 #   --help          : print this list and exit
 #
 # Run from project root:
@@ -30,12 +32,14 @@ ROOTPW="${MYSQL_ROOT_PASSWORD:-rootpass}"
 DO_DEMO_DATA=0
 DO_LOGS=0
 DO_HA=0
+DO_BASE=0
 for arg in "$@"; do
   case "$arg" in
     --demo-data)  DO_DEMO_DATA=1 ;;
     --logs)       DO_LOGS=1 ;;
     --ha)         DO_HA=1 ;;
-    --all)        DO_DEMO_DATA=1; DO_LOGS=1; DO_HA=1 ;;
+    --base)       DO_BASE=1 ;;
+    --all)        DO_DEMO_DATA=1; DO_LOGS=1; DO_HA=1; DO_BASE=1 ;;
     --help|-h)
       # Print the leading comment block (stop at first non-# line).
       awk 'NR==1{next} /^[^#]/{exit} /^#/{sub(/^# ?/,""); print}' "$0"
@@ -147,13 +151,31 @@ if [ "$DO_HA" = "1" ]; then
   fi
 fi
 
+# ── Optional: base stack tear-down (volumes preserved) ──────────────────────────
+
+if [ "$DO_BASE" = "1" ]; then
+  step "7. Tear down base stack (volumes preserved — encrypted data survives)"
+  if docker ps -a --format '{{.Names}}' | grep -qE '^dbsec-(mysql|proxysql|acra-server|prometheus|grafana|alertmanager|mysqld-exporter)$'; then
+    # docker compose down (no -v) so named volumes survive:
+    #   - mysql_data (real users, encrypted ssn/cc)
+    #   - acra_keys (master key)
+    #   - prometheus_data, grafana_data
+    # Next `make demo-up` reuses them -> fast bootstrap.
+    docker compose --profile acra down 2>&1 | sed 's/^/    /' | tail -10
+    ok "base stack down (volumes preserved). Re-bootstrap: make demo-up"
+  else
+    warn "base stack not up, skipped"
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────────
 
 echo
 echo -e "${GREEN}Cleanup complete.${NC}"
 echo "  flags used:"
-echo "    demo-data=$DO_DEMO_DATA  logs=$DO_LOGS  ha=$DO_HA"
+echo "    demo-data=$DO_DEMO_DATA  logs=$DO_LOGS  ha=$DO_HA  base=$DO_BASE"
 [ "$DO_DEMO_DATA" = "0" ] && echo "  (run with --demo-data to also delete demo rows)"
 [ "$DO_LOGS" = "0" ]      && echo "  (run with --logs to truncate logs/mysql)"
 [ "$DO_HA" = "0" ]        && echo "  (run with --ha to tear down the HA cluster)"
-[ "$DO_DEMO_DATA$DO_LOGS$DO_HA" = "111" ] || echo "  (run with --all for everything)"
+[ "$DO_BASE" = "0" ]      && echo "  (run with --base to tear down mysql/proxysql/acra/grafana/prometheus)"
+[ "$DO_DEMO_DATA$DO_LOGS$DO_HA$DO_BASE" = "1111" ] || echo "  (run with --all for everything)"
