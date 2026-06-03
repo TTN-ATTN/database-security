@@ -3,23 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Database Security Demo{% endblock %}</title>
+  <title>{% block title %}atmnc{% endblock %}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="bg-light">
 
 {% if user %}
-<nav class="navbar navbar-dark bg-dark px-3">
-  <span class="navbar-brand">🔒 DB Security Demo</span>
-  <div class="d-flex align-items-center gap-3">
-    <a href="http://127.0.0.1:3000" target="_blank" class="text-light small">📊 Grafana</a>
-    <a href="http://127.0.0.1:9090/alerts" target="_blank" class="text-light small">📡 Prometheus</a>
-    <a href="http://127.0.0.1:9093" target="_blank" class="text-light small">🚨 Alertmanager</a>
-    <span class="vr text-secondary"></span>
-    <span class="badge bg-{{ {'customer': 'primary', 'support': 'warning', 'admin': 'danger'}[user.role] }} text-uppercase">{{ user.role }}</span>
-    <span class="text-light small">{{ user.display_name }} <span class="text-muted">({{ user.subtitle }})</span></span>
-    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-light">Logout</a>
+<nav class="navbar navbar-light bg-white border-bottom px-3 py-2">
+  <div class="container-fluid p-0">
+    <div class="d-flex align-items-center gap-3">
+      <span class="brand">atmnc</span>
+      {% if user.role == 'customer' %}
+        <a href="{{ url_for('customer_profile') }}" class="nav-link-item">Account</a>
+      {% elif user.role == 'support' %}
+        <a href="{{ url_for('support_list') }}" class="nav-link-item">Customers</a>
+      {% elif user.role == 'admin' %}
+        <a href="{{ url_for('admin_dashboard') }}" class="nav-link-item">Operations</a>
+      {% endif %}
+    </div>
+    <div class="d-flex align-items-center gap-3">
+      {% if user.role == 'admin' %}
+      <div class="dropdown">
+        <a class="nav-link-item dropdown-toggle small" href="#" data-bs-toggle="dropdown">Tools</a>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item small" href="http://127.0.0.1:3000" target="_blank">Grafana</a></li>
+          <li><a class="dropdown-item small" href="http://127.0.0.1:9090/alerts" target="_blank">Prometheus</a></li>
+          <li><a class="dropdown-item small" href="http://127.0.0.1:9093" target="_blank">Alertmanager</a></li>
+        </ul>
+      </div>
+      {% endif %}
+      <span class="user-chip">
+        <span class="user-chip-name">{{ user.display_name }}</span>
+        <span class="user-chip-sub">{{ user.subtitle }}</span>
+      </span>
+      <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-secondary">Sign out</a>
+    </div>
   </div>
 </nav>
 {% endif %}
@@ -29,5 +48,6 @@
 </main>
 
 {% block scripts %}{% endblock %}
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

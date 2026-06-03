@@ -1,119 +1,103 @@
 {% extends "_layout.html" %}
-{% block title %}Admin Dashboard{% endblock %}
+{% block title %}Operations — atmnc{% endblock %}
 
 {% block content %}
 <div class="row g-4">
   <div class="col-xl-8">
 
-    <!-- Panel A: Raw at-rest -->
-    <div class="card mb-3 border-dark">
+    <h1 class="h4 mb-3">Operations</h1>
+
+    <!-- Raw data at rest -->
+    <div class="card mb-3">
       <div class="card-body">
-        <h2 class="h5">🛠 A. Raw at-rest view (DBA → MySQL trực tiếp port 3307)</h2>
-        <p class="text-muted small mb-2">
-          Bạn là DBA, có toàn quyền MySQL. Bạn chạy
-          <code>SELECT * FROM users WHERE id=1</code>. Vì <strong>không có Acra trên đường</strong>,
-          bạn thấy bytes thô. SSN/credit_card là AcraStruct ciphertext.
-        </p>
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Storage sample</h2>
+          <span class="small text-muted">SELECT * FROM users WHERE id=1 — direct (no proxy)</span>
+        </div>
         {% if raw %}
-        <table class="table table-sm result-table">
+        <table class="table table-sm mb-0 detail-table">
           <tbody>
-            <tr><td class="field-name">id / name</td><td>{{ raw.id }} — {{ raw.first_name }} {{ raw.last_name }}</td></tr>
+            <tr><td class="field-name">id</td><td>{{ raw.id }}</td></tr>
+            <tr><td class="field-name">name</td><td>{{ raw.first_name }} {{ raw.last_name }}</td></tr>
             <tr><td class="field-name">ssn</td>
-              <td class="field-cipher">
-                &lt;ciphertext {{ raw.ssn_len }} bytes — hex head 0x{{ raw.ssn_hex }}…&gt;
-              </td></tr>
+              <td class="font-mono small">[{{ raw.ssn_len }}B] 0x{{ raw.ssn_hex }}…</td></tr>
             <tr><td class="field-name">credit_card</td>
-              <td class="field-cipher">
-                &lt;ciphertext {{ raw.cc_len }} bytes — hex head 0x{{ raw.cc_hex }}…&gt;
-              </td></tr>
+              <td class="font-mono small">[{{ raw.cc_len }}B] 0x{{ raw.cc_hex }}…</td></tr>
           </tbody>
         </table>
-        <div class="alert alert-info mb-0 small">
-          <strong>Separation of duties</strong>: DBA giữ MySQL nhưng không giữ Acra master key.
-          Dump database mang đi → vẫn chỉ là ciphertext. Đây là kiểm soát chống insider threat cụ thể.
-        </div>
         {% else %}
-        <div class="alert alert-warning">Không đọc được dữ liệu — kiểm tra MySQL trực tiếp port 3307.</div>
+        <div class="text-muted small">Unable to read.</div>
         {% endif %}
       </div>
     </div>
 
-    <!-- Panel B: HA Infrastructure -->
-    <div class="card mb-3 border-primary">
+    <!-- HA Infrastructure -->
+    <div class="card mb-3">
       <div class="card-body">
-        <h2 class="h5">🛡 B. HA Infrastructure (Group Replication 3-node)</h2>
+        <div class="d-flex justify-content-between align-items-baseline mb-3">
+          <h2 class="h6 mb-0">Database cluster</h2>
+          <span class="small text-muted">Group Replication, 3 nodes</span>
+        </div>
         {% if ha_up %}
-        <p class="text-muted small mb-3">
-          Click 💥 trên node bất kỳ để mô phỏng infra failure. Group Replication sẽ bầu primary mới,
-          ProxySQL HA-router tự reroute write traffic. Node được tự khôi phục sau ~10s để demo lại được.
-        </p>
         <div class="row g-2 mb-2">
           {% for n in nodes %}
-          {% set color = 'success' if n.status == 'ONLINE' else 'danger' %}
-          {% set primary = (n.role == 'PRIMARY' and n.status == 'ONLINE') %}
+          {% set ok = (n.status == 'ONLINE') %}
+          {% set primary = (n.role == 'PRIMARY' and ok) %}
           <div class="col-md-4">
-            <div class="card border-{{ color }}">
-              <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-start">
-                  <div>
-                    <div class="fw-bold">{{ n.name }}</div>
-                    <div class="small">
-                      <span class="badge bg-{{ color }}">{{ n.status }}</span>
-                      <span class="badge bg-{{ 'primary' if primary else 'secondary' }}">{{ n.role }}</span>
-                    </div>
+            <div class="node-card {% if ok %}node-online{% else %}node-down{% endif %}">
+              <div class="d-flex justify-content-between align-items-start">
+                <div>
+                  <div class="node-name">{{ n.name }}</div>
+                  <div class="node-meta">
+                    <span class="status-dot {% if ok %}dot-green{% else %}dot-red{% endif %}"></span>
+                    {{ n.status }}{% if primary %} · primary{% elif ok %} · replica{% endif %}
                   </div>
-                  <button class="btn btn-sm btn-outline-danger kill-btn" data-node="{{ n.name }}"
-                          {% if n.status != 'ONLINE' %}disabled{% endif %}>
-                    💥 Kill
-                  </button>
                 </div>
+                <button class="btn btn-sm btn-outline-secondary kill-btn" data-node="{{ n.name }}"
+                        {% if not ok %}disabled{% endif %}>Stop</button>
               </div>
             </div>
           </div>
           {% endfor %}
         </div>
-        <div id="kill-result" class="alert alert-info d-none mb-0"></div>
+        <div id="kill-result" class="small mt-2 d-none"></div>
         {% else %}
-        <div class="alert alert-warning mb-0">
-          HA cluster offline. Chạy <code>make ha-bootstrap</code> để bật (cần ~1.5GB RAM, ~2 phút).
-        </div>
+        <div class="text-muted small">Cluster offline. Run <code>make ha-bootstrap</code>.</div>
         {% endif %}
       </div>
     </div>
 
-    <!-- Panel C: Phase 5 stress -->
-    <div class="card mb-3 border-info">
+    <!-- Load testing -->
+    <div class="card mb-3">
       <div class="card-body">
-        <h2 class="h5">📈 C. Phase 5 — Stress test</h2>
-        <p class="text-muted small">
-          Trigger load → mở Grafana (link header) để xem dashboard react + Alertmanager xem alert.
-        </p>
-        <div class="row g-2">
-          <div class="col-md-4"><button class="btn btn-outline-info w-100 stress-btn" data-stress="slow_query">🐢 Slow query (8s SLEEP)</button></div>
-          <div class="col-md-4"><button class="btn btn-outline-info w-100 stress-btn" data-stress="conn_burst">🌊 Connection burst (50)</button></div>
-          <div class="col-md-4"><button class="btn btn-outline-info w-100 stress-btn" data-stress="mixed_load">⚡ Mixed load (30s)</button></div>
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Load testing</h2>
+          <a href="http://127.0.0.1:3000" target="_blank" class="small text-muted">Open Grafana →</a>
         </div>
-        <div id="stress-result" class="alert alert-info d-none mt-3 mb-0"></div>
+        <div class="row g-2">
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="slow_query">Slow query</button></div>
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="conn_burst">Connection burst</button></div>
+          <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100 stress-btn" data-stress="mixed_load">Mixed workload</button></div>
+        </div>
+        <div id="stress-result" class="small mt-2 text-muted d-none"></div>
       </div>
     </div>
 
-    <!-- Panel D: Phase 6 discovery -->
-    <div class="card mb-3 border-success">
+    <!-- Compliance scan -->
+    <div class="card mb-3">
       <div class="card-body">
-        <h2 class="h5">🔍 D. Phase 6 — PII Discovery scan</h2>
-        <p class="text-muted small">
-          Quét regex trên mọi cột text — phát hiện PII rò rỉ trong free-text nơi mask theo view bỏ sót
-          (vd <code>activity_logs.notes</code>).
-        </p>
-        <button class="btn btn-outline-success" id="scan-btn">🔍 Scan testdb</button>
-        <div id="scan-result" class="mt-3 d-none">
-          <div id="scan-loading" class="text-muted">Đang scan…</div>
+        <div class="d-flex justify-content-between align-items-baseline mb-2">
+          <h2 class="h6 mb-0">Compliance scan</h2>
+          <button class="btn btn-sm btn-dark" id="scan-btn">Run scan</button>
+        </div>
+        <p class="small text-muted mb-2">Scans text columns for SSN, credit card, email, phone patterns.</p>
+        <div id="scan-result" class="d-none">
+          <div id="scan-loading" class="small text-muted">Scanning…</div>
           <div id="scan-content" class="d-none">
-            <div class="mb-2"><span class="badge bg-success" id="scan-total"></span></div>
-            <table class="table table-sm result-table">
+            <div class="small text-muted mb-2"><span id="scan-total"></span></div>
+            <table class="table table-sm detail-table">
               <thead><tr>
-                <th>Table</th><th>Column</th><th>Pattern</th><th>Severity</th>
-                <th>Verdict</th><th>#</th>
+                <th>Table</th><th>Column</th><th>Pattern</th><th>Severity</th><th>Verdict</th><th>Hits</th>
               </tr></thead>
               <tbody id="scan-rows"></tbody>
             </table>
@@ -121,79 +105,71 @@
         </div>
       </div>
     </div>
+
   </div>
 
-  <!-- Right column: live log + alerts -->
   <div class="col-xl-4">
     {% include "_live_log.html" %}
 
-    <div class="card mt-3 border-warning sidebar-card">
-      <div class="card-header bg-warning bg-opacity-25 py-2 d-flex justify-content-between">
-        <strong>🚨 Active alerts</strong>
+    <div class="card mt-3 sidebar-card">
+      <div class="card-header bg-white py-2 d-flex justify-content-between border-bottom">
+        <strong class="small">Alerts</strong>
         <span class="small text-muted" id="alerts-status">—</span>
       </div>
       <div class="card-body p-2" id="alerts-body">
-        <div class="text-muted small">Đang đợi Prometheus…</div>
+        <div class="text-muted small">Loading…</div>
       </div>
     </div>
   </div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
-// ── HA: Kill node ─────────────────────────────────────────────────────────────
 document.querySelectorAll(".kill-btn").forEach(b => {
   b.addEventListener("click", async () => {
     const node = b.dataset.node;
     const out = document.getElementById("kill-result");
-    out.classList.remove("d-none", "alert-success", "alert-danger");
-    out.classList.add("alert-info");
-    out.innerHTML = `🔥 Đang stop <code>${node}</code> + chờ GR election…`;
+    out.classList.remove("d-none");
+    out.className = "small mt-2 text-muted";
+    out.textContent = `Stopping ${node}, waiting for election…`;
     document.querySelectorAll(".kill-btn").forEach(x => x.disabled = true);
     try {
       const r = await fetch(`/admin/kill/${node}`, {method: "POST"});
       const j = await r.json();
       if (j.error) {
-        out.classList.replace("alert-info", "alert-danger");
-        out.innerHTML = `❌ ${j.error}`;
+        out.className = "small mt-2 text-danger";
+        out.textContent = j.error;
       } else {
-        out.classList.replace("alert-info", "alert-success");
-        out.innerHTML = `✅ Killed <code>${j.killed}</code>. Primary mới: <strong>${j.elected_primary}</strong>.
-          Node cũ đang rejoin. <a href="${location.href}" class="alert-link">Refresh trang</a> để xem topology mới.`;
+        out.className = "small mt-2";
+        out.innerHTML = `New primary: <code>${j.elected_primary}</code>. <a href="${location.href}">Reload</a>`;
       }
     } catch (e) {
-      out.classList.replace("alert-info", "alert-danger");
-      out.textContent = "❌ " + e;
+      out.className = "small mt-2 text-danger";
+      out.textContent = e;
     }
     document.querySelectorAll(".kill-btn").forEach(x => x.disabled = false);
   });
 });
 
-// ── Stress test ───────────────────────────────────────────────────────────────
 document.querySelectorAll(".stress-btn").forEach(b => {
   b.addEventListener("click", async () => {
     const kind = b.dataset.stress;
     const out = document.getElementById("stress-result");
     out.classList.remove("d-none");
-    out.innerHTML = "⏳ kicking off…";
+    out.textContent = "Starting…";
     try {
       const r = await fetch(`/api/stress/${kind}`, {method: "POST"});
       const j = await r.json();
-      if (j.started) {
-        out.innerHTML = `✅ <strong>${kind}</strong> đang chạy (${j.duration}). ${j.description}<br>
-          → ${j.watch}`;
-      } else {
-        out.innerHTML = `⚠️ ${kind} đã chạy sẵn (đợi xong rồi mới trigger lần nữa)`;
-      }
+      out.textContent = j.started
+        ? `${kind} running (${j.duration}). Check Grafana for impact.`
+        : `${kind} already in progress.`;
     } catch (e) {
-      out.textContent = "❌ " + e;
+      out.textContent = e;
     }
   });
 });
 
-// ── Discovery scan ────────────────────────────────────────────────────────────
 document.getElementById("scan-btn").addEventListener("click", async () => {
   const panel = document.getElementById("scan-result");
   const loading = document.getElementById("scan-loading");
@@ -206,56 +182,56 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
     const j = await r.json();
     loading.classList.add("d-none");
     if (j.error) {
-      panel.innerHTML = `<div class="alert alert-danger">${j.error}</div>`;
+      panel.innerHTML = `<div class="text-danger small">${j.error}</div>`;
       return;
     }
     document.getElementById("scan-total").textContent = `${j.total} findings`;
     const tbody = document.getElementById("scan-rows");
     tbody.innerHTML = "";
     for (const f of j.findings) {
-      const sev = (f.severity || "").toLowerCase();
-      const sevCls = sev === "high" ? "bg-danger" : sev === "medium" ? "bg-warning text-dark" : "bg-secondary";
-      const verdictCls = (f.verdict || "").toUpperCase().includes("EXPOSED") ? "bg-danger" : "bg-success";
+      const sev = (f.severity || "").toUpperCase();
+      const sevCls = sev === "HIGH" ? "sev-high" : sev === "MEDIUM" ? "sev-med" : "sev-low";
+      const verdict = (f.verdict || "").toUpperCase();
+      const verdictCls = verdict.includes("EXPOSED") ? "text-danger" : "text-success";
       tbody.innerHTML += `
         <tr>
           <td>${f.table || ""}</td>
-          <td>${f.column || ""}</td>
+          <td><code>${f.column || ""}</code></td>
           <td>${f.pattern || ""}</td>
-          <td><span class="badge ${sevCls}">${f.severity || "?"}</span></td>
-          <td><span class="badge ${verdictCls}">${f.verdict || "?"}</span></td>
+          <td><span class="sev-pill ${sevCls}">${sev || "?"}</span></td>
+          <td class="${verdictCls} small">${verdict || "?"}</td>
           <td>${f.count || 0}</td>
         </tr>`;
     }
     content.classList.remove("d-none");
   } catch (e) {
     loading.classList.add("d-none");
-    panel.innerHTML = `<div class="alert alert-danger">${e}</div>`;
+    panel.innerHTML = `<div class="text-danger small">${e}</div>`;
   }
 });
 
-// ── Alerts poller (every 5s) ──────────────────────────────────────────────────
 async function refreshAlerts() {
   try {
     const r = await fetch("/api/alerts");
     const j = await r.json();
     document.getElementById("alerts-status").textContent =
-      `🔥 ${j.firing_count}  ⏳ ${j.pending_count}`;
+      `${j.firing_count} firing · ${j.pending_count} pending`;
     const body = document.getElementById("alerts-body");
     if (j.firing.length === 0 && j.pending.length === 0) {
-      body.innerHTML = '<div class="text-success small">✅ Không có alert nào</div>';
+      body.innerHTML = '<div class="text-muted small">No active alerts.</div>';
     } else {
       body.innerHTML = j.firing.map(a => `
-        <div class="border-start border-danger border-3 ps-2 mb-2">
-          <strong class="text-danger">🔥 ${a.name}</strong>
+        <div class="alert-row alert-firing">
+          <div class="small fw-semibold">${a.name}</div>
           <div class="small text-muted">${a.summary || a.instance}</div>
         </div>`).join("") + j.pending.map(a => `
-        <div class="border-start border-warning border-3 ps-2 mb-2">
-          <strong class="text-warning">⏳ ${a.name} (pending)</strong>
+        <div class="alert-row alert-pending">
+          <div class="small fw-semibold">${a.name} <span class="text-muted">(pending)</span></div>
           <div class="small text-muted">${a.instance}</div>
         </div>`).join("");
     }
   } catch (e) {
-    document.getElementById("alerts-status").textContent = "⚠ offline";
+    document.getElementById("alerts-status").textContent = "offline";
   }
 }
 refreshAlerts();
